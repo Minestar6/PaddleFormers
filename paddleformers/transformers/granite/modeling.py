@@ -188,7 +188,7 @@ class GraniteAttention(nn.Layer):
         #   effective_scale = (scaling / head_dim^-0.5) * head_dim^-0.5 = scaling
         if scaling is not None:
             head_dim = query.shape[-1]
-            default_fa_scale = head_dim ** -0.5
+            default_fa_scale = head_dim**-0.5
             query = query * (scaling / default_fa_scale)
         if self.num_key_value_groups > 1:
             key = repeat_kv(key, self.num_key_value_groups)
