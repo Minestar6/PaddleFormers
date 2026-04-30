@@ -319,11 +319,7 @@ class GraniteDecoderLayer(nn.Layer):
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states * self.residual_multiplier
-
-        outputs = (hidden_states,)
-        if len(outputs) == 1 and isinstance(outputs, tuple):
-            outputs = outputs[0]
-        return outputs
+        return hidden_states
 
 
 class GranitePretrainedModel(PretrainedModel):
@@ -589,3 +585,12 @@ class GraniteForCausalLM(GranitePretrainedModel):
 class GraniteForCausalLMPipe(GeneralModelForCausalLMPipe):
     config_class = GraniteConfig
     _decoder_layer_cls = GraniteDecoderLayer
+    config_class = GraniteConfig
+    _decoder_layer_cls = GraniteDecoderLayer
+    _get_tensor_parallel_mappings = GraniteModel._get_tensor_parallel_mappings
+    _init_weights = GraniteModel._init_weights
+    _keep_in_fp32_modules = GraniteModel._keep_in_fp32_modules
+    _tied_weights_keys = ["lm_head.weight"]
+    transpose_weight_keys = GraniteModel.transpose_weight_keys
+    _gen_aoa_config = GraniteForCausalLM._gen_aoa_config
+    _gen_inv_aoa_config = GraniteForCausalLM._gen_inv_aoa_config
