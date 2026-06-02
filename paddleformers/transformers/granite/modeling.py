@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Callable, Optional, Tuple, Union
 
 import paddle
@@ -330,6 +331,45 @@ class GranitePretrainedModel(PretrainedModel):
     _supports_flash_attn = True
     _supports_sdpa = True
     transpose_weight_keys = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+    @classmethod
+    def _get_tensor_parallel_mappings(cls, config: GraniteConfig, is_split=True):
+        from ..conversion_utils import split_or_merge_func
+
+        fn = split_or_merge_func(
+            is_split=is_split,
+            tensor_model_parallel_size=config.tensor_model_parallel_size,
+            tensor_parallel_rank=config.tensor_parallel_rank,
+            num_attention_heads=config.num_attention_heads,
+        )
+
+        actions = {
+            "embed_tokens.weight": partial(fn, is_column=False),
+            "lm_head.weight": partial(fn, is_column=False),
+        }
+
+        for layer_idx in range(config.num_hidden_layers):
+            layer_prefix = f"layers.{layer_idx}"
+            actions[f"{layer_prefix}.self_attn.q_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.self_attn.k_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.self_attn.v_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.self_attn.o_proj.weight"] = partial(fn, is_column=False)
+            actions[f"{layer_prefix}.mlp.gate_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.mlp.up_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.mlp.down_proj.weight"] = partial(fn, is_column=False)
+
+            if config.attention_bias:
+                actions[f"{layer_prefix}.self_attn.q_proj.bias"] = partial(fn, is_column=True)
+                actions[f"{layer_prefix}.self_attn.k_proj.bias"] = partial(fn, is_column=True)
+                actions[f"{layer_prefix}.self_attn.v_proj.bias"] = partial(fn, is_column=True)
+                actions[f"{layer_prefix}.self_attn.o_proj.bias"] = partial(fn, is_column=False)
+
+            if config.mlp_bias:
+                actions[f"{layer_prefix}.mlp.gate_proj.bias"] = partial(fn, is_column=True)
+                actions[f"{layer_prefix}.mlp.up_proj.bias"] = partial(fn, is_column=True)
+                actions[f"{layer_prefix}.mlp.down_proj.bias"] = partial(fn, is_column=False)
+
+        return actions
 
     @classmethod
     def _gen_aoa_config(cls, config: GraniteConfig):
