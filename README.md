@@ -96,6 +96,11 @@ PaddleFormers 是基于百度深度学习框架 PaddlePaddle 搭建的 Transform
       <td>gpt</td>
     </tr>
     <tr>
+      <td>Seed-OSS</td>
+      <td>ByteDance-Seed/Seed-OSS-36B-Base、ByteDance-Seed/Seed-OSS-36B-Instruct</td>
+      <td>seed_oss</td>
+    </tr>
+    <tr>
       <td>Granite</td>
       <td>ibm-granite/granite-3.2-2b-base、ibm-granite/granite-3.2-2b-instruct、ibm-granite/granite-3.2-8b-base、ibm-granite/granite-3.2-8b-instruct</td>
       <td>granite</td>
