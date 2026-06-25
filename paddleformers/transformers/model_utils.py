@@ -105,6 +105,7 @@ from .utils import (  # convert_ndarray_dtype,
 )
 
 VLMS = [
+    "ayavision",
     "qwen2vl",
     "qwen2_5_vl",
 ]
@@ -2923,6 +2924,8 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
             # and _gen_aoa_config already handles critical dtype specs (e.g. gate.weight -> float32)
             if dtype is not None and not getattr(cls, "is_fleet", False):
                 for key in model.state_dict().keys():
+                    if config.tie_word_embeddings and key.endswith("lm_head.weight"):
+                        continue
                     if model.state_dict()[key].dtype == paddle.float32:
                         aoa_config["aoa_statements"].append(f"{key} -> {key}, dtype='float32'")
                     else:

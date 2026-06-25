@@ -48,6 +48,7 @@ from .tokenizer import AutoTokenizer
 
 PROCESSOR_MAPPING_NAMES = OrderedDict(
     [
+        ("aya_vision", "AyaVisionProcessor"),
         ("kimi_k25", "KimiK25Processor"),
         ("qwen2_5_vl", "Qwen2_5_VLProcessor"),
         ("qwen3_vl", "Qwen3VLProcessor"),

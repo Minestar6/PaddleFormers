@@ -53,6 +53,8 @@ __all__ = [
 
 MAPPING_NAMES = OrderedDict(
     [
+        ("AyaVision", "aya_vision"),
+        ("Cohere2", "cohere2"),
         ("DeepseekV3", "deepseek_v3"),
         ("DeepseekV32", "deepseek_v32"),
         ("PaliGemma2", "paligemma2"),
@@ -84,6 +86,7 @@ MAPPING_NAMES = OrderedDict(
         ("Phi4", "phi4"),
         ("Gemma3", "gemma3"),
         ("Gemma3Text", "gemma3_text"),
+        ("SiglipVision", "siglip_vision_model"),
         ("Gemma4Moe", "gemma4_moe"),
         ("Glm4vMoe", "glm4v_moe"),
         ("GlmOcr", "glm_ocr"),
