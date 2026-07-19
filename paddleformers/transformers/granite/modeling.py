@@ -622,9 +622,28 @@ class GraniteForCausalLM(GranitePretrainedModel):
         )
 
 
+def _scaled_embedding(config: GraniteConfig):
+    embed_tokens = GeneralEmbedding.create(
+        config=config,
+        num_embeddings=config.vocab_size,
+        embedding_dim=config.hidden_size,
+        padding_idx=config.pad_token_id,
+    )
+    forward = embed_tokens.forward
+
+    def scaled_forward(input_ids: paddle.Tensor):
+        return forward(input_ids) * config.embedding_multiplier
+
+    embed_tokens.forward = scaled_forward
+    embed_tokens._granite_scales_embeddings = True
+    return embed_tokens
+
+
 class GraniteEmbeddingPipe(EmbeddingPipe):
     def forward(self, args):
         outputs = super().forward(args)
+        if getattr(self.embed_tokens, "_granite_scales_embeddings", False):
+            return outputs
         if isinstance(outputs, tuple):
             return (outputs[0] * self.config.embedding_multiplier,) + outputs[1:]
         return outputs * self.config.embedding_multiplier
@@ -640,6 +659,7 @@ class GraniteForCausalLMPipe(GeneralModelForCausalLMPipe):
     config_class = GraniteConfig
     _decoder_layer_cls = GraniteDecoderLayer
     _rotary_emb_cls = GraniteRotaryEmbedding
+    _embed_cls = _scaled_embedding
     _embedding_pipe_cls = GraniteEmbeddingPipe
     _lmhead_pipe_cls = GraniteLMHeadPipe
     _get_tensor_parallel_mappings = GraniteModel._get_tensor_parallel_mappings
