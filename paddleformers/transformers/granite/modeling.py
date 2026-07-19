@@ -28,7 +28,7 @@ from ...nn.embedding import Embedding as GeneralEmbedding
 from ...nn.linear import Linear as GeneralLinear
 from ...nn.lm_head import LMHead as GeneralLMHead
 from ...nn.mlp import MLP
-from ...nn.pp_model import GeneralModelForCausalLMPipe
+from ...nn.pp_model import EmbeddingPipe, GeneralModelForCausalLMPipe, LMHeadPipe
 from ..cache_utils import Cache, DynamicCache
 from ..masking_utils import create_causal_mask_and_row_indices
 from ..model_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
@@ -622,11 +622,26 @@ class GraniteForCausalLM(GranitePretrainedModel):
         )
 
 
+class GraniteEmbeddingPipe(EmbeddingPipe):
+    def forward(self, args):
+        outputs = super().forward(args)
+        if isinstance(outputs, tuple):
+            return (outputs[0] * self.config.embedding_multiplier,) + outputs[1:]
+        return outputs * self.config.embedding_multiplier
+
+
+class GraniteLMHeadPipe(LMHeadPipe):
+    def forward(self, args):
+        logits = super().forward(args)
+        return logits / self.config.logits_scaling
+
+
 class GraniteForCausalLMPipe(GeneralModelForCausalLMPipe):
     config_class = GraniteConfig
     _decoder_layer_cls = GraniteDecoderLayer
-    config_class = GraniteConfig
-    _decoder_layer_cls = GraniteDecoderLayer
+    _rotary_emb_cls = GraniteRotaryEmbedding
+    _embedding_pipe_cls = GraniteEmbeddingPipe
+    _lmhead_pipe_cls = GraniteLMHeadPipe
     _get_tensor_parallel_mappings = GraniteModel._get_tensor_parallel_mappings
     _init_weights = GraniteModel._init_weights
     _keep_in_fp32_modules = GraniteModel._keep_in_fp32_modules
