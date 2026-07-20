@@ -929,26 +929,6 @@ register_template(
 )
 
 register_template(
-    name="seed_oss",
-    format_user=StringFormatter(
-        slots=[
-            "<|start_of_role|>user<|end_of_role|>{{content}}<|end_of_text|>\n"
-            "<|start_of_role|>assistant<|end_of_role|>"
-        ]
-    ),
-    format_assistant=StringFormatter(slots=["{{content}}"]),
-    format_system=StringFormatter(slots=["<|start_of_role|>system<|end_of_role|>{{content}}<|end_of_text|>\n"]),
-    format_observation=StringFormatter(
-        slots=[
-            "<|start_of_role|>tool_response<|end_of_role|>{{content}}<|end_of_text|>\n"
-            "<|start_of_role|>assistant<|end_of_role|>"
-        ]
-    ),
-    chat_sep="<|end_of_text|>\n",
-    suffix=["<|end_of_text|>"],
-)
-
-register_template(
     name="llama3",
     format_user=StringFormatter(
         slots=[

@@ -21,6 +21,7 @@ from typing import Optional, Tuple, Union
 
 import paddle
 from paddle import nn
+from paddle.distributed.fleet.utils.sequence_parallel_utils import ScatterOp
 
 from ...nn.attention.interface import ALL_ATTENTION_FUNCTIONS
 from ...nn.criterion.interface import CriterionLayer
@@ -203,10 +204,22 @@ class SeedOssAttention(nn.Layer):
         **kwargs,
     ) -> Tuple[paddle.Tensor, Optional[paddle.Tensor], Optional[Cache]]:
         del use_cache, kwargs
-        input_shape = hidden_states.shape[:-1]
+        if self.config.sequence_parallel:
+            seq_length = self.config.max_sequence_length
+            batch_size = hidden_states.shape[0] * self.config.tensor_model_parallel_size // seq_length
+            input_shape = [batch_size, seq_length]
+        else:
+            input_shape = hidden_states.shape[:-1]
+
         query_states = self.q_proj(hidden_states).reshape([*input_shape, self.num_heads, self.head_dim]).transpose(1, 2)
-        key_states = self.k_proj(hidden_states).reshape([*input_shape, self.num_key_value_heads, self.head_dim]).transpose(1, 2)
-        value_states = self.v_proj(hidden_states).reshape([*input_shape, self.num_key_value_heads, self.head_dim]).transpose(1, 2)
+        key_states = (
+            self.k_proj(hidden_states).reshape([*input_shape, self.num_key_value_heads, self.head_dim]).transpose(1, 2)
+        )
+        value_states = (
+            self.v_proj(hidden_states)
+            .reshape([*input_shape, self.num_key_value_heads, self.head_dim])
+            .transpose(1, 2)
+        )
 
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -225,6 +238,8 @@ class SeedOssAttention(nn.Layer):
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
         )
+        if self.config.sequence_parallel:
+            attn_output = attn_output.reshape([-1, attn_output.shape[-1]])
         attn_output = self.o_proj(attn_output)
         attn_output = nn.functional.dropout(
             attn_output,
@@ -491,6 +506,10 @@ class SeedOssModel(SeedOssPretrainedModel):
             inputs_embeds = self.embed_tokens(input_ids)
         else:
             batch_size, seq_length = inputs_embeds.shape[:2]
+
+        if self.config.sequence_parallel:
+            inputs_embeds = inputs_embeds.reshape([-1, inputs_embeds.shape[-1]])
+            inputs_embeds = ScatterOp.apply(inputs_embeds)
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache(config=self.config)
