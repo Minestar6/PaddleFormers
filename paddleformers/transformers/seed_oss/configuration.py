@@ -25,7 +25,7 @@ class SeedOssConfig(PretrainedConfig):
     def __init__(
         self,
         vocab_size=155136,
-        hidden_size=4096,
+        hidden_size=5120,
         intermediate_size=27648,
         num_hidden_layers=64,
         num_attention_heads=80,
@@ -47,7 +47,7 @@ class SeedOssConfig(PretrainedConfig):
         attention_dropout=0.1,
         residual_dropout=0.1,
         mlp_bias=False,
-        head_dim=None,
+        head_dim=128,
         use_bias=False,
         fuse_rms_norm=False,
         ignored_index=-100,
