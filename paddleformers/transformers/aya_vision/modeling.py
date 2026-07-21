@@ -424,6 +424,8 @@ class AyaVisionForConditionalGeneration(AyaVisionPreTrainedModel):
                 setattr(config.text_config, attr, getattr(config, attr))
         self.lm_head = GeneralLMHead(config.text_config)
         self.criterion = AyaVisionCriterionLayer(config)
+        if config.tie_word_embeddings:
+            self.tie_weights()
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
@@ -536,6 +538,61 @@ class AyaVisionForConditionalGeneration(AyaVisionPreTrainedModel):
         else:
             model_inputs["pixel_values"] = None
         return model_inputs
+
+    def _get_image_tile_nums(self, input_ids):
+        image_tokens_per_tile = (
+            self.config.vision_config.image_size
+            // self.config.vision_config.patch_size
+            // self.config.downsample_factor
+        ) ** 2
+        image_token_counts = (input_ids == self.config.image_token_index).astype("int64").sum(axis=-1)
+        image_tile_nums = []
+        for image_token_count in image_token_counts.tolist():
+            image_token_count = int(image_token_count)
+            if image_token_count % image_tokens_per_tile != 0:
+                raise ValueError(
+                    f"Image tokens per sample must be divisible by tokens per tile, got "
+                    f"{image_token_count} and {image_tokens_per_tile}."
+                )
+            image_tile_nums.append(image_token_count // image_tokens_per_tile)
+        return image_tile_nums
+
+    def expand_inputs_for_generation(self, input_ids, expand_size, attention_mask=None, **model_kwargs):
+        source_input_ids = input_ids
+        input_ids, model_kwargs = super().expand_inputs_for_generation(
+            input_ids,
+            expand_size=expand_size,
+            attention_mask=attention_mask,
+            **model_kwargs,
+        )
+
+        def _repeat_interleave_samples(x, lengths, repeat_times):
+            samples = paddle.split(x, lengths, axis=0)
+            out = []
+            for sample in samples:
+                reps = [repeat_times] + [1] * (len(sample.shape) - 1)
+                out.append(paddle.tile(sample, reps))
+            return paddle.concat(out, axis=0)
+
+        def _expand_dict_for_generation_visual(dict_to_expand):
+            image_tile_nums = self._get_image_tile_nums(source_input_ids)
+            pixel_values = dict_to_expand.get("pixel_values")
+            if pixel_values is None:
+                return dict_to_expand
+            if sum(image_tile_nums) != pixel_values.shape[0]:
+                raise ValueError(
+                    f"Image tokens and pixel values do not match, tokens imply {sum(image_tile_nums)} tiles, "
+                    f"but pixel_values has {pixel_values.shape[0]} tiles."
+                )
+            dict_to_expand["pixel_values"] = _repeat_interleave_samples(
+                pixel_values, lengths=image_tile_nums, repeat_times=expand_size
+            )
+            return dict_to_expand
+
+        if expand_size > 1:
+            model_kwargs = _expand_dict_for_generation_visual(model_kwargs)
+
+        return input_ids, model_kwargs
 
 
 __all__ = [

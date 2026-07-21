@@ -72,9 +72,7 @@ class AyaVisionProcessor(ProcessorMixin):
         self.tile_token = tile_token
         self.tile_global_token = tile_global_token
         self.image_token_id = tokenizer.convert_tokens_to_ids(self.img_patch_token)
-        self.image_ids = tokenizer.convert_tokens_to_ids(
-            [img_patch_token, tile_token, tile_global_token, start_of_img_token, end_of_img_token]
-        )
+        self._set_image_token_ids(max_num_patches=1)
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
@@ -92,6 +90,17 @@ class AyaVisionProcessor(ProcessorMixin):
         img_string += self.tile_global_token + self.img_patch_token * img_patches_per_tile
         img_string += self.end_of_img_token
         return img_string
+
+    def _set_image_token_ids(self, max_num_patches):
+        tile_tokens = [self.tile_global_token] + [f"{self.tile_token}_{idx}" for idx in range(1, int(max_num_patches))]
+        self.image_token_ids = self.tokenizer.convert_tokens_to_ids(
+            [
+                self.img_patch_token,
+                self.start_of_img_token,
+                self.end_of_img_token,
+                *tile_tokens,
+            ]
+        )
 
     @staticmethod
     def _to_int_list(value):
@@ -131,12 +140,14 @@ class AyaVisionProcessor(ProcessorMixin):
             num_patches = self._to_int_list(image_inputs.pop("num_patches"))
 
             image_index = 0
+            max_num_patches = 1
             processed_text = []
             for prompt in text:
                 new_prompt = prompt
                 while self.image_token in new_prompt:
                     if image_index >= len(num_patches):
                         raise ValueError("Number of image placeholders exceeds processed images.")
+                    max_num_patches = max(max_num_patches, int(num_patches[image_index]))
                     image_tokens = self._prompt_split_image(num_patches[image_index])
                     new_prompt = new_prompt.replace(self.image_token, image_tokens, 1)
                     image_index += 1
@@ -145,6 +156,7 @@ class AyaVisionProcessor(ProcessorMixin):
             if image_index != len(images):
                 raise ValueError("Number of image placeholders in the prompt does not match the number of images.")
 
+            self._set_image_token_ids(max_num_patches)
             text = processed_text
 
         return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
@@ -152,7 +164,10 @@ class AyaVisionProcessor(ProcessorMixin):
         text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"], return_tensors=None)
 
         if return_mm_token_type_ids:
-            text_inputs["mm_token_type_ids"] = self.create_mm_token_type_ids(text_inputs["input_ids"])
+            array_ids = np.array(text_inputs["input_ids"])
+            mm_token_type_ids = np.zeros_like(text_inputs["input_ids"])
+            mm_token_type_ids[np.isin(array_ids, self.image_token_ids)] = 1
+            text_inputs["mm_token_type_ids"] = mm_token_type_ids.tolist()
         return BatchFeature(data={**text_inputs, **image_inputs}, tensor_type=return_tensors)
 
     def _get_num_multimodal_tokens(self, image_sizes=None, **kwargs):
