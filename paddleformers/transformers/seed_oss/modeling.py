@@ -730,7 +730,13 @@ class SeedOssForTokenClassification(SeedOssPretrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.model = SeedOssModel(config)
-        self.dropout = nn.Dropout(getattr(config, "classifier_dropout", 0.1))
+        if getattr(config, "classifier_dropout", None) is not None:
+            classifier_dropout = config.classifier_dropout
+        elif getattr(config, "hidden_dropout_prob", None) is not None:
+            classifier_dropout = config.hidden_dropout_prob
+        else:
+            classifier_dropout = 0.1
+        self.dropout = nn.Dropout(classifier_dropout)
         self.score = GeneralLinear.create(config.hidden_size, self.num_labels, has_bias=True, config=config)
 
     def forward(
