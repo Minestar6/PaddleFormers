@@ -93,7 +93,7 @@ PaddleFormers 是基于百度深度学习框架 PaddlePaddle 搭建的 Transform
     <tr>
       <td>Seed-OSS</td>
       <td>ByteDance-Seed/Seed-OSS-36B-Base、ByteDance-Seed/Seed-OSS-36B-Instruct</td>
-      <td>seed_oss</td>
+      <td>-</td>
     </tr>
     <tr>
       <td>Granite</td>
