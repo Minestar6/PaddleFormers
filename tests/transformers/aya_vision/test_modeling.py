@@ -20,10 +20,19 @@ import unittest
 import numpy as np
 import paddle
 
-from paddleformers.transformers import AyaVisionConfig, AyaVisionForConditionalGeneration, AyaVisionModel, AyaVisionProcessor
+from paddleformers.transformers import (
+    AyaVisionConfig,
+    AyaVisionForConditionalGeneration,
+    AyaVisionModel,
+    AyaVisionProcessor,
+)
 from tests.testing_utils import gpu_device_initializer
 from tests.transformers.test_generation_utils import GenerationTesterMixin
-from tests.transformers.test_modeling_common import ModelTesterMixin, floats_tensor, ids_tensor
+from tests.transformers.test_modeling_common import (
+    ModelTesterMixin,
+    floats_tensor,
+    ids_tensor,
+)
 
 
 class AyaVisionModelTester:
@@ -293,8 +302,12 @@ class AyaVisionModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestC
             inputs = self._prepare_for_class(inputs_dict, model_class)
             with tempfile.TemporaryDirectory() as tmpdirname:
                 model.save_pretrained(tmpdirname, save_checkpoint_format="flex_checkpoint")
-                hf_loaded_model = model_class.from_pretrained(tmpdirname, convert_from_hf=True, load_checkpoint_format="").eval()
-                flex_loaded_model = model_class.from_pretrained(tmpdirname, load_checkpoint_format="flex_checkpoint").eval()
+                hf_loaded_model = model_class.from_pretrained(
+                    tmpdirname, convert_from_hf=True, load_checkpoint_format=""
+                ).eval()
+                flex_loaded_model = model_class.from_pretrained(
+                    tmpdirname, load_checkpoint_format="flex_checkpoint"
+                ).eval()
 
                 hf_state_dict = hf_loaded_model.state_dict()
                 flex_state_dict = flex_loaded_model.state_dict()
@@ -312,16 +325,25 @@ class AyaVisionModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestC
         model = AyaVisionModel(config)
         model.eval()
         outputs = model(**self._prepare_for_class(inputs_dict, AyaVisionModel), return_dict=True)
-        self.assertEqual(outputs.last_hidden_state.shape, [self.model_tester.batch_size, self.model_tester.seq_length, self.model_tester.hidden_size])
+        self.assertEqual(
+            outputs.last_hidden_state.shape,
+            [self.model_tester.batch_size, self.model_tester.seq_length, self.model_tester.hidden_size],
+        )
         self.assertIsNotNone(outputs.image_hidden_states)
-        self.assertEqual(outputs.image_hidden_states.shape[1] * outputs.image_hidden_states.shape[2], self.model_tester.num_image_tokens)
+        self.assertEqual(
+            outputs.image_hidden_states.shape[1] * outputs.image_hidden_states.shape[2],
+            self.model_tester.num_image_tokens,
+        )
 
     def test_conditional_generation_forward(self):
         config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
         model = AyaVisionForConditionalGeneration(config)
         model.eval()
         outputs = model(**inputs_dict, return_dict=True)
-        self.assertEqual(outputs.logits.shape, [self.model_tester.batch_size, self.model_tester.seq_length, self.model_tester.vocab_size])
+        self.assertEqual(
+            outputs.logits.shape,
+            [self.model_tester.batch_size, self.model_tester.seq_length, self.model_tester.vocab_size],
+        )
         self.assertIsNotNone(outputs.loss)
         self.assertIsNotNone(outputs.image_hidden_states)
 
@@ -363,6 +385,31 @@ class AyaVisionModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestC
             output_generate = self._beam_search_generate(model=model, inputs_dict=inputs_dict, beam_kwargs=beam_kwargs)
             self.assertEqual(output_generate[0].shape[1], inputs_dict["input_ids"].shape[1] + self.max_new_tokens)
 
+    def test_expand_inputs_for_generation_expands_pixel_values_by_image_tiles(self):
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        model = AyaVisionForConditionalGeneration(config).eval()
+        image_tokens_per_tile = self.model_tester.num_image_tokens
+        input_ids = inputs_dict["input_ids"].clone()
+        input_ids[1, 1 : 1 + image_tokens_per_tile * 2] = self.model_tester.image_token_index
+        pixel_values = paddle.arange(
+            3 * self.model_tester.num_channels * self.model_tester.image_size * self.model_tester.image_size,
+            dtype="float32",
+        ).reshape([3, self.model_tester.num_channels, self.model_tester.image_size, self.model_tester.image_size])
+
+        expanded_input_ids, expanded_kwargs = model.expand_inputs_for_generation(
+            input_ids,
+            expand_size=2,
+            attention_mask=inputs_dict["attention_mask"],
+            pixel_values=pixel_values,
+        )
+
+        self.assertEqual(expanded_input_ids.shape[0], input_ids.shape[0] * 2)
+        self.assertEqual(expanded_kwargs["pixel_values"].shape[0], 6)
+        self.assertTrue(paddle.equal_all(expanded_kwargs["pixel_values"][0], pixel_values[0]))
+        self.assertTrue(paddle.equal_all(expanded_kwargs["pixel_values"][1], pixel_values[0]))
+        self.assertTrue(paddle.equal_all(expanded_kwargs["pixel_values"][2:4], pixel_values[1:3]))
+        self.assertTrue(paddle.equal_all(expanded_kwargs["pixel_values"][4:6], pixel_values[1:3]))
+
     @unittest.skip("AyaVision generation requires input_ids and pixel_values on the first generation step.")
     def test_generate_without_input_ids(self):
         pass
@@ -394,6 +441,8 @@ class AyaVisionProcessorTest(unittest.TestCase):
                 "TILE_GLOBAL": 101,
                 "<|START_OF_IMG|>": 102,
                 "<|END_OF_IMG|>": 103,
+                "TILE_1": 104,
+                "compare": 105,
             }
 
         def convert_tokens_to_ids(self, tokens):
@@ -405,8 +454,18 @@ class AyaVisionProcessorTest(unittest.TestCase):
             del kwargs
             input_ids = []
             for sample in text:
-                token_count = sample.count("<|IMG_PATCH|>")
-                input_ids.append([self.vocab["<|IMG_PATCH|>"]] * token_count)
+                sample_ids = []
+                index = 0
+                special_tokens = sorted(self.vocab, key=len, reverse=True)
+                while index < len(sample):
+                    for token in special_tokens:
+                        if sample.startswith(token, index):
+                            sample_ids.append(self.vocab[token])
+                            index += len(token)
+                            break
+                    else:
+                        index += 1
+                input_ids.append(sample_ids)
             return {"input_ids": input_ids, "attention_mask": [[1] * len(ids) for ids in input_ids]}
 
     def get_processor(self):
@@ -424,15 +483,7 @@ class AyaVisionProcessorTest(unittest.TestCase):
         processor.tile_token = "TILE"
         processor.tile_global_token = "TILE_GLOBAL"
         processor.image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.img_patch_token)
-        processor.image_ids = processor.tokenizer.convert_tokens_to_ids(
-            [
-                processor.img_patch_token,
-                processor.tile_token,
-                processor.tile_global_token,
-                processor.start_of_img_token,
-                processor.end_of_img_token,
-            ]
-        )
+        processor._set_image_token_ids(max_num_patches=1)
         return processor
 
     def test_processor_expands_image_placeholders(self):
@@ -445,12 +496,30 @@ class AyaVisionProcessorTest(unittest.TestCase):
         self.assertNotIn("num_patches", outputs)
         self.assertTrue(processor.image_processor.kwargs["crop_to_patches"])
 
+    def test_processor_returns_mm_token_type_ids_for_all_image_tokens(self):
+        processor = self.get_processor()
+        image = np.zeros((16, 16, 3), dtype=np.uint8)
+
+        outputs = processor(text="<image> compare <image>", images=[image, image], return_mm_token_type_ids=True)
+
+        self.assertIn("mm_token_type_ids", outputs)
+        expected_token_type_ids = [
+            1 if token_id in processor.image_token_ids else 0 for token_id in outputs["input_ids"][0]
+        ]
+        self.assertEqual(outputs["mm_token_type_ids"][0], expected_token_type_ids)
+        self.assertIn(0, outputs["mm_token_type_ids"][0])
+        self.assertIn(processor.tokenizer.convert_tokens_to_ids(processor.start_of_img_token), outputs["input_ids"][0])
+        self.assertIn(processor.tokenizer.convert_tokens_to_ids("TILE_1"), outputs["input_ids"][0])
+        self.assertIn(processor.tokenizer.convert_tokens_to_ids(processor.tile_global_token), outputs["input_ids"][0])
+        self.assertIn(processor.tokenizer.convert_tokens_to_ids(processor.end_of_img_token), outputs["input_ids"][0])
+
     def test_processor_mismatching_image_placeholders(self):
         processor = self.get_processor()
         image = np.zeros((16, 16, 3), dtype=np.uint8)
 
         with self.assertRaises(ValueError):
             processor(text="no image token", images=[image])
+
 
 if __name__ == "__main__":
     unittest.main()
