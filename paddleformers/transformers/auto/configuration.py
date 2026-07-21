@@ -118,7 +118,7 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("qwen3_vl_moe", "Qwen3VLMoe"),
         ("qwen3_vl_moe_text", "Qwen3VLMoeText"),
         ("hyperencoder", "HyperEncoderModelFleet"),
-        ("seed_oss", "SeedOssModel"),
+        ("seed_oss", "SeedOssForCausalLM"),
         ("glm_ocr", "GlmOcrForConditionalGeneration"),
         ("phi4_multimodal", "Phi4MultimodalModel"),
         ("minicpm", "MiniCPM"),
