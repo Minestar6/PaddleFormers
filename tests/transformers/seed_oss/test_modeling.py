@@ -20,7 +20,6 @@ import numpy as np
 import paddle
 
 from paddleformers.transformers import (
-    AutoModelForCausalLM,
     SeedOssConfig,
     SeedOssForCausalLM,
     SeedOssForQuestionAnswering,
