@@ -211,14 +211,14 @@ class SeedOssAttention(nn.Layer):
         else:
             input_shape = hidden_states.shape[:-1]
 
-        query_states = self.q_proj(hidden_states).reshape([*input_shape, self.num_heads, self.head_dim]).transpose(1, 2)
+        query_states = (
+            self.q_proj(hidden_states).reshape([*input_shape, self.num_heads, self.head_dim]).transpose(1, 2)
+        )
         key_states = (
             self.k_proj(hidden_states).reshape([*input_shape, self.num_key_value_heads, self.head_dim]).transpose(1, 2)
         )
         value_states = (
-            self.v_proj(hidden_states)
-            .reshape([*input_shape, self.num_key_value_heads, self.head_dim])
-            .transpose(1, 2)
+            self.v_proj(hidden_states).reshape([*input_shape, self.num_key_value_heads, self.head_dim]).transpose(1, 2)
         )
 
         cos, sin = position_embeddings
