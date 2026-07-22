@@ -281,7 +281,13 @@ class CohereLMHeadPipe(GeneralLMHead):
     def forward(self, args):
         hidden_states, _, _, _, _ = parse_args(args)
         logits = super().forward(hidden_states)
-        return logits * self.config.logit_scale if self.config.logit_scale is not None else logits
+        if self.config.logit_scale is not None:
+            if isinstance(logits, tuple):
+                hidden_states, lm_head_weight, lm_head_bias, transpose_y = logits
+                lm_head_bias = lm_head_bias * self.config.logit_scale if lm_head_bias is not None else None
+                return (hidden_states, lm_head_weight * self.config.logit_scale, lm_head_bias, transpose_y)
+            return logits * self.config.logit_scale
+        return logits
 
 
 class CoherePretrainedModel(PretrainedModel):
@@ -530,6 +536,8 @@ class CohereForCausalLM(CoherePretrainedModel):
         attn_mask_startend_row_indices: Optional[paddle.Tensor] = None,
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+        if kwargs.get("attn_mask_start_row_indices", None) is not None and attn_mask_startend_row_indices is None:
+            attn_mask_startend_row_indices = kwargs.pop("attn_mask_start_row_indices")
         del kwargs
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs = self.model(
@@ -546,7 +554,12 @@ class CohereForCausalLM(CoherePretrainedModel):
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
         if self.config.logit_scale is not None:
-            logits = logits * self.config.logit_scale
+            if isinstance(logits, tuple):
+                hidden_states, lm_head_weight, lm_head_bias, transpose_y = logits
+                lm_head_bias = lm_head_bias * self.config.logit_scale if lm_head_bias is not None else None
+                logits = (hidden_states, lm_head_weight * self.config.logit_scale, lm_head_bias, transpose_y)
+            else:
+                logits = logits * self.config.logit_scale
 
         loss = None
         if labels is not None:
