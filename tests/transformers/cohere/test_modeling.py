@@ -198,7 +198,9 @@ class CohereModelTester:
         next_attention_mask = paddle.cat([input_mask, next_mask], axis=-1)
         next_input_ids = paddle.cat([input_ids, next_tokens], axis=-1)
 
-        outputs = model(next_input_ids, attention_mask=next_attention_mask, output_hidden_states=True, return_dict=True)
+        outputs = model(
+            next_input_ids, attention_mask=next_attention_mask, output_hidden_states=True, return_dict=True
+        )
         output_from_no_past = outputs.hidden_states[0]
 
         outputs = model(
