@@ -7,6 +7,7 @@ from typing import Optional, Tuple, Union
 import paddle
 from paddle import nn
 
+from ...nn.lm_head import LMHead as GeneralLMHead
 from ..activations import ACT2FN
 from ..cache_utils import Cache, DynamicCache
 from ..masking_utils import create_causal_masks_and_row_indices
@@ -185,7 +186,7 @@ class Cohere2PreTrainedModel(PretrainedModel):
     config_class = Cohere2Config
     base_model_prefix = "model"
     _keys_to_ignore_on_load_unexpected = [r"rotary_emb.inv_freq"]
-    transpose_weight_keys = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "lm_head"]
+    transpose_weight_keys = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
     @classmethod
     def _gen_aoa_config(cls, config: Cohere2Config):
@@ -223,9 +224,9 @@ class Cohere2PreTrainedModel(PretrainedModel):
             )
         if cls != cls.base_model_class:
             if config.tie_word_embeddings:
-                aoa_statements.append("model.embed_tokens.weight^T -> lm_head.weight")
+                aoa_statements.append("model.embed_tokens.weight -> lm_head.weight")
             else:
-                aoa_statements.append("lm_head.weight^T -> lm_head.weight")
+                aoa_statements.append("lm_head.weight -> lm_head.weight")
         return {"aoa_statements": aoa_statements}
 
     @classmethod
@@ -263,7 +264,7 @@ class Cohere2PreTrainedModel(PretrainedModel):
                 ]
             )
         if not config.tie_word_embeddings and cls != cls.base_model_class:
-            aoa_statements.append("lm_head.weight^T -> lm_head.weight")
+            aoa_statements.append("lm_head.weight -> lm_head.weight")
         return {"aoa_statements": aoa_statements}
 
 
@@ -390,14 +391,16 @@ class Cohere2Model(Cohere2PreTrainedModel):
 
 class Cohere2ForCausalLM(Cohere2PreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
+    _keys_to_ignore_on_load_missing = [r"lm_head.weight"]
 
     def __init__(self, config: Cohere2Config):
         super().__init__(config)
         self.model = Cohere2Model(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias_attr=False)
+        self.lm_head = GeneralLMHead(config)
         self.logit_scale = config.logit_scale
         self.tie_word_embeddings = config.tie_word_embeddings
+        self.tie_weights()
 
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
@@ -438,10 +441,7 @@ class Cohere2ForCausalLM(Cohere2PreTrainedModel):
         hidden_states = outputs[0]
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         hidden_states = hidden_states[:, slice_indices, :]
-        if self.config.tie_word_embeddings:
-            logits = paddle.matmul(hidden_states, self.model.embed_tokens.weight, transpose_y=True)
-        else:
-            logits = self.lm_head(hidden_states)
+        logits = self.lm_head(hidden_states)
         logits = logits * self.logit_scale
         loss = None
         if labels is not None:

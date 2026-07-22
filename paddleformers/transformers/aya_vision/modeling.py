@@ -121,7 +121,6 @@ class AyaVisionPreTrainedModel(PretrainedModel):
         "fc2",
         "linear_1",
         "linear_2",
-        "lm_head",
     ]
     _keys_to_ignore_on_load_unexpected = [r"rotary_emb.inv_freq", r"position_ids"]
 
@@ -225,6 +224,8 @@ class AyaVisionPreTrainedModel(PretrainedModel):
             SiglipVisionModel._append_head_inv_aoa_statements(
                 aoa_statements, f"{vision_prefix}.head", "vision_tower.vision_model.head"
             )
+        if cls != AyaVisionModel:
+            aoa_statements.append(f"lm_head.weight -> {'_' if config.tie_word_embeddings else 'lm_head.weight'}")
 
         for layer_id in range(config.text_config.num_hidden_layers):
             src = f"{text_prefix}.layers.{layer_id}"
