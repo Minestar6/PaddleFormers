@@ -62,5 +62,10 @@ class AyaVisionConfig(PretrainedConfig):
         self.alignment_activation_fn = alignment_activation_fn
         self.projector_hidden_act = projector_hidden_act
 
+        # Sync _attn_implementation to sub-configs (align with Qwen3-VL pattern)
+        if "_attn_implementation" in kwargs:
+            self.vision_config._attn_implementation = kwargs["_attn_implementation"]
+            self.text_config._attn_implementation = kwargs["_attn_implementation"]
+
 
 __all__ = ["AyaVisionConfig"]

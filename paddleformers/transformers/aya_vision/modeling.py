@@ -347,6 +347,23 @@ class AyaVisionModel(AyaVisionPreTrainedModel):
         keep_mask = (~special_image_mask).unsqueeze(-1).astype(inputs_embeds.dtype)
         return inputs_embeds * keep_mask + scattered
 
+    def get_rope_index(self, input_ids, attention_mask=None, **kwargs):
+        batch_size, seq_length = input_ids.shape
+        if attention_mask is None:
+            text_position_ids = paddle.arange(seq_length, dtype="int64").reshape([1, seq_length])
+            text_position_ids = text_position_ids.expand([batch_size, seq_length])
+        else:
+            attention_mask = attention_mask.astype("int64")
+            text_position_ids = paddle.cumsum(attention_mask, axis=-1) - 1
+            text_position_ids = paddle.where(
+                attention_mask == 1,
+                text_position_ids,
+                paddle.zeros_like(text_position_ids),
+            )
+
+        position_ids = text_position_ids.unsqueeze(0).expand([3, batch_size, seq_length])
+        return position_ids, None
+
     def forward(
         self,
         input_ids: Optional[paddle.Tensor] = None,
@@ -378,6 +395,9 @@ class AyaVisionModel(AyaVisionPreTrainedModel):
             )
             inputs_embeds = self._merge_image_features(input_ids, inputs_embeds, image_features)
 
+        if position_ids is not None and len(position_ids.shape) == 3:
+            position_ids = position_ids[0]
+
         outputs = self.language_model(
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -387,6 +407,7 @@ class AyaVisionModel(AyaVisionPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=True,
+            attn_mask_startend_row_indices=kwargs.get("attn_mask_startend_row_indices", None),
         )
         if not return_dict:
             return (
@@ -450,6 +471,9 @@ class AyaVisionForConditionalGeneration(AyaVisionPreTrainedModel):
             pixel_values, vision_feature_layer, vision_feature_select_strategy, **kwargs
         )
 
+    def get_rope_index(self, input_ids, attention_mask=None, **kwargs):
+        return self.model.get_rope_index(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
     def forward(
         self,
         input_ids: Optional[paddle.Tensor] = None,
@@ -483,6 +507,7 @@ class AyaVisionForConditionalGeneration(AyaVisionPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=True,
+            attn_mask_startend_row_indices=kwargs.get("attn_mask_startend_row_indices", None),
         )
         hidden_states = outputs.last_hidden_state
         if isinstance(logits_to_keep, int):
