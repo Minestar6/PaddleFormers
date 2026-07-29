@@ -332,7 +332,7 @@ class SeedOssToolUtils(ToolUtils):
                         f"{required_text}: {description}"
                     )
                 tool_text += "\n\n"
-            tool_text += "    \"\"\""
+            tool_text += '    """'
 
         return SEED_OSS_TOOL_PROMPT.format(tool_text=tool_text)
 
