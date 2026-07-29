@@ -22,10 +22,10 @@ from paddleformers.datasets.template.formatter import (
     ToolFormatter,
 )
 from paddleformers.datasets.template.template import (
+    TEMPLATES,
     GLM5ReasoningTemplate,
     ReasoningTemplate,
     Role,
-    TEMPLATES,
     Template,
     get_template_and_fix_tokenizer,
     register_template,
