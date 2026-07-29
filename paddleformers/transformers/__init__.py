@@ -199,6 +199,7 @@ import_structure = {
         "SeedOssForTokenClassification",
         "SeedOssForQuestionAnswering",
     ],
+    "seed_oss": [],
     "kimi_k25.vision_processor": ["KimiK25VisionProcessor"],
     "kimi_k25.processor": ["KimiK25Processor"],
     "kimi_k25.tokenizer": ["TikTokenTokenizer"],
