@@ -314,6 +314,7 @@ class AyaVisionModel(AyaVisionPreTrainedModel):
             pixel_values,
             output_hidden_states=True,
             return_dict=True,
+            interpolate_pos_encoding=True,
             **kwargs,
         )
         if isinstance(vision_feature_layer, int):
