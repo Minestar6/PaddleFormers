@@ -7,6 +7,7 @@ from typing import Optional
 import paddle
 from paddle import nn
 
+from ...nn.attention.interface import ALL_ATTENTION_FUNCTIONS
 from ..activations import ACT2FN
 from ..model_outputs import BaseModelOutput, BaseModelOutputWithPooling
 from ..model_utils import PretrainedModel, register_base_model
@@ -63,6 +64,7 @@ class SiglipVisionEmbeddings(nn.Layer):
 class SiglipAttention(nn.Layer):
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
+        self.config = config
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.embed_dim // self.num_heads
@@ -73,10 +75,21 @@ class SiglipAttention(nn.Layer):
             )
         self.scale = self.head_dim**-0.5
         self.dropout = config.attention_dropout
+        self.is_causal = False
+        self.num_key_value_groups = 1
         self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+    def _get_bidirectional_indices(self, batch_size, seq_len, dtype):
+        """Generate flashmask startend_row_indices for full bidirectional attention.
+
+        Each position attends to [0, seq_len) — the entire sequence.
+        Follows Qwen3-VL's pattern for non-causal vision attention.
+        """
+        indices = paddle.to_tensor([0, seq_len, 0, seq_len], dtype="int32")
+        return indices.reshape([1, 1, 1, 4]).expand([batch_size, self.num_heads, seq_len, 4])
 
     def forward(self, hidden_states, attention_mask=None):
         bsz, seq_len, _ = hidden_states.shape
@@ -85,15 +98,24 @@ class SiglipAttention(nn.Layer):
         key = self.k_proj(hidden_states).reshape(target_shape).transpose([0, 2, 1, 3])
         value = self.v_proj(hidden_states).reshape(target_shape).transpose([0, 2, 1, 3])
 
-        attn_weights = paddle.matmul(query, key, transpose_y=True) * self.scale
-        if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-        attn_weights = nn.functional.softmax(attn_weights.astype("float32"), axis=-1).astype(query.dtype)
-        if self.training and self.dropout:
-            attn_weights = nn.functional.dropout(attn_weights, p=self.dropout)
-        attn_output = paddle.matmul(attn_weights, value).transpose([0, 2, 1, 3])
-        attn_output = attn_output.reshape([bsz, seq_len, self.embed_dim])
-        return self.out_proj(attn_output), attn_weights
+        attn_impl = self.config._attn_implementation
+        attention_interface = ALL_ATTENTION_FUNCTIONS["sdpa"]
+        if attn_impl != "sdpa":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[attn_impl]
+
+        attn_output, attn_weights = attention_interface(
+            self,
+            query=query,
+            key=key,
+            value=value,
+            attention_mask=attention_mask,
+            attn_mask_startend_row_indices=self._get_bidirectional_indices(bsz, seq_len, query.dtype),
+            dropout=0.0 if not self.training else self.dropout,
+            scaling=self.scale,
+        )
+
+        attn_output = self.out_proj(attn_output)
+        return attn_output, attn_weights
 
 
 class SiglipMLP(nn.Layer):

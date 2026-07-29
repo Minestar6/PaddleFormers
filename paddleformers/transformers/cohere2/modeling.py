@@ -6,11 +6,16 @@ from typing import Optional, Tuple, Union
 
 import paddle
 from paddle import nn
+from paddle.distributed.fleet.recompute.recompute import recompute
 
+from ...nn.attention.interface import ALL_ATTENTION_FUNCTIONS
 from ...nn.lm_head import LMHead as GeneralLMHead
 from ..activations import ACT2FN
 from ..cache_utils import Cache, DynamicCache
-from ..masking_utils import create_causal_masks_and_row_indices
+from ..masking_utils import (
+    create_causal_mask_and_row_indices,
+    create_sliding_window_causal_mask_and_row_indices,
+)
 from ..model_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from ..model_utils import PretrainedModel, register_base_model
 from .configuration import Cohere2Config
@@ -29,14 +34,6 @@ class Cohere2LayerNorm(nn.Layer):
         variance = paddle.square(hidden_states - mean).mean(axis=-1, keepdim=True)
         hidden_states = (hidden_states - mean) * paddle.rsqrt(variance + self.variance_epsilon)
         return (self.weight.astype("float32") * hidden_states).astype(input_dtype)
-
-
-def repeat_kv(hidden_states, n_rep):
-    if n_rep == 1:
-        return hidden_states
-    bsz, num_key_value_heads, seq_len, head_dim = hidden_states.shape
-    hidden_states = hidden_states.unsqueeze(2).expand([bsz, num_key_value_heads, n_rep, seq_len, head_dim])
-    return hidden_states.reshape([bsz, num_key_value_heads * n_rep, seq_len, head_dim])
 
 
 def rotate_half(x):
@@ -58,7 +55,7 @@ class Cohere2RotaryEmbedding(nn.Layer):
         super().__init__()
         self.config = config
         self.rope_theta = config.rope_theta
-        self.head_dim = config.hidden_size // config.num_attention_heads
+        self.head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
         inv_freq = 1.0 / (self.rope_theta ** (paddle.arange(0, self.head_dim, 2, dtype="float32") / self.head_dim))
         self.register_buffer("inv_freq", inv_freq, persistable=False)
         self.attention_scaling = 1.0
@@ -87,6 +84,7 @@ class Cohere2Attention(nn.Layer):
         self.attention_dropout = config.attention_dropout
         self.attention_type = config.layer_types[layer_idx]
         self.sliding_window = config.sliding_window if self.attention_type == "sliding_attention" else None
+        self.is_causal = True
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias_attr=config.attention_bias)
         self.k_proj = nn.Linear(
             self.hidden_size, self.num_key_value_heads * self.head_dim, bias_attr=config.attention_bias
@@ -104,6 +102,7 @@ class Cohere2Attention(nn.Layer):
         hidden_states,
         position_embeddings: Tuple[paddle.Tensor, paddle.Tensor],
         attention_mask: Optional[paddle.Tensor] = None,
+        attn_mask_startend_row_indices: Optional[paddle.Tensor] = None,
         past_key_values: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
@@ -124,16 +123,22 @@ class Cohere2Attention(nn.Layer):
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
         if past_key_values is not None:
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
-        attn_weights = paddle.matmul(query_states, key_states, transpose_y=True) * self.scaling
-        if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-        attn_weights = nn.functional.softmax(attn_weights.astype("float32"), axis=-1).astype(query_states.dtype)
-        if self.training and self.attention_dropout:
-            attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout)
-        attn_output = paddle.matmul(attn_weights, value_states).transpose([0, 2, 1, 3])
-        attn_output = attn_output.reshape([bsz, q_len, self.num_heads * self.head_dim])
+
+        attention_interface = ALL_ATTENTION_FUNCTIONS["sdpa"]
+        if self.config._attn_implementation != "sdpa":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        attn_output, attn_weights = attention_interface(
+            self,
+            query=query_states,
+            key=key_states,
+            value=value_states,
+            attention_mask=attention_mask,
+            attn_mask_startend_row_indices=attn_mask_startend_row_indices,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+        )
+
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights if output_attentions else None
 
@@ -163,6 +168,7 @@ class Cohere2DecoderLayer(nn.Layer):
         hidden_states,
         position_embeddings,
         attention_mask=None,
+        attn_mask_startend_row_indices=None,
         past_key_values=None,
         output_attentions=False,
         use_cache=False,
@@ -174,6 +180,7 @@ class Cohere2DecoderLayer(nn.Layer):
             hidden_states,
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
+            attn_mask_startend_row_indices=attn_mask_startend_row_indices,
             past_key_values=past_key_values,
             output_attentions=output_attentions,
             use_cache=use_cache,
@@ -185,6 +192,7 @@ class Cohere2DecoderLayer(nn.Layer):
 class Cohere2PreTrainedModel(PretrainedModel):
     config_class = Cohere2Config
     base_model_prefix = "model"
+    supports_gradient_checkpointing = True
     _keys_to_ignore_on_load_unexpected = [r"rotary_emb.inv_freq"]
     transpose_weight_keys = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
@@ -308,12 +316,46 @@ class Cohere2Model(Cohere2PreTrainedModel):
         self.layers = nn.LayerList([Cohere2DecoderLayer(config, i) for i in range(config.num_hidden_layers)])
         self.norm = Cohere2LayerNorm([config.hidden_size], eps=config.layer_norm_eps)
         self.rotary_emb = Cohere2RotaryEmbedding(config)
+        self.has_sliding_layers = getattr(
+            self.config, "sliding_window", None
+        ) is not None and "sliding_attention" in getattr(self.config, "layer_types", [])
 
     def get_input_embeddings(self):
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
         self.embed_tokens = value
+
+    @paddle.jit.not_to_static
+    def recompute_training_full(
+        self,
+        layer_module: nn.Layer,
+        hidden_states,
+        position_embeddings,
+        attention_mask,
+        attn_mask_startend_row_indices,
+    ):
+        def create_custom_forward(module):
+            def custom_forward(*inputs):
+                return module(
+                    inputs[0],
+                    position_embeddings=inputs[1],
+                    attention_mask=inputs[2],
+                    attn_mask_startend_row_indices=inputs[3] if inputs[3] is not None else None,
+                    past_key_values=None,
+                    output_attentions=False,
+                    use_cache=False,
+                )
+
+            return custom_forward
+
+        return recompute(
+            create_custom_forward(layer_module),
+            hidden_states,
+            position_embeddings,
+            attention_mask,
+            attn_mask_startend_row_indices,
+        )
 
     def forward(
         self,
@@ -326,6 +368,7 @@ class Cohere2Model(Cohere2PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        attn_mask_startend_row_indices: Optional[paddle.Tensor] = None,
         **kwargs,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -347,30 +390,60 @@ class Cohere2Model(Cohere2PreTrainedModel):
             position_ids = paddle.arange(cache_length, cache_length + seq_length, dtype="int64").expand(
                 [batch_size, seq_length]
             )
-        causal_mask_mapping, _ = create_causal_masks_and_row_indices(
-            config=self.config,
-            inputs_embeds=inputs_embeds,
-            batch_size=batch_size,
-            seq_length=seq_length,
-            cache_length=cache_length,
-            attention_mask=attention_mask,
-            prepare_decoder_attention_mask=_prepare_4d_causal_attention_mask,
-        )
+        # Prepare mask arguments (align with GPT-OSS/Gemma3_text/Qwen3 pattern)
+        mask_kwargs = {
+            "config": self.config,
+            "inputs_embeds": inputs_embeds,
+            "batch_size": batch_size,
+            "seq_length": seq_length,
+            "cache_length": cache_length,
+            "attention_mask": attention_mask,
+            "attn_mask_startend_row_indices": attn_mask_startend_row_indices,
+            "prepare_decoder_attention_mask": _prepare_4d_causal_attention_mask,
+        }
+        full_mask, full_indices = create_causal_mask_and_row_indices(**mask_kwargs)
+
+        causal_mask_mapping = {"full_attention": full_mask}
+        attn_mask_startend_row_indices_mapping = {"full_attention": full_indices}
+
+        if self.has_sliding_layers:
+            (
+                causal_mask_mapping["sliding_attention"],
+                attn_mask_startend_row_indices_mapping["sliding_attention"],
+            ) = create_sliding_window_causal_mask_and_row_indices(**mask_kwargs)
         hidden_states = inputs_embeds
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        for decoder_layer in self.layers:
+        for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
-            layer_outputs = decoder_layer(
-                hidden_states,
-                position_embeddings=position_embeddings,
-                attention_mask=causal_mask_mapping[decoder_layer.attention_type],
-                past_key_values=past_key_values,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-            )
+            has_gradient = not hidden_states.stop_gradient
+            if (
+                self.config.recompute_granularity == "full"
+                and self.config.recompute_method == "uniform"
+                and self.config.recompute_num_layers == 1
+                and has_gradient
+            ):
+                layer_outputs = self.recompute_training_full(
+                    decoder_layer,
+                    hidden_states,
+                    position_embeddings,
+                    causal_mask_mapping[decoder_layer.attention_type],
+                    attn_mask_startend_row_indices_mapping[decoder_layer.attention_type],
+                )
+            else:
+                layer_outputs = decoder_layer(
+                    hidden_states,
+                    position_embeddings=position_embeddings,
+                    attention_mask=causal_mask_mapping[decoder_layer.attention_type],
+                    attn_mask_startend_row_indices=attn_mask_startend_row_indices_mapping[
+                        decoder_layer.attention_type
+                    ],
+                    past_key_values=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                )
             hidden_states = layer_outputs[0]
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
