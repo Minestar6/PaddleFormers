@@ -33,7 +33,7 @@ class AyaVisionConfig(PretrainedConfig):
                 hidden_size=1152,
                 intermediate_size=4304,
                 patch_size=14,
-                image_size=384,
+                image_size=364,
                 num_hidden_layers=26,
                 num_attention_heads=14,
                 vision_use_head=False,
