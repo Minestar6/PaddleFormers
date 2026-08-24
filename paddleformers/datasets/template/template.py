@@ -648,6 +648,38 @@ register_template(
     mm_plugin=get_mm_plugin(name="paddleocr_vl", image_token="<|IMAGE_PLACEHOLDER|>"),
 )
 
+register_template(
+    name="llava_next",
+    format_user=StringFormatter(slots=["[INST] {{content}} [/INST]"]),
+    format_assistant=StringFormatter(slots=["{{content}}"]),
+    format_system=StringFormatter(slots=["<<SYS>>\n{{content}}\n<</SYS>>\n\n"]),
+    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="default"),
+    format_observation=StringFormatter(slots=["[INST] {{content}} [/INST]"]),
+    format_tools=ToolFormatter(tool_format="default"),
+    chat_sep="</s>",
+    suffix=["</s>"],
+    mm_plugin=get_mm_plugin(name="llava_next", image_token="<image>"),
+    template_class=Llama2Template,
+)
+
+register_template(
+    name="granite_vision",
+    format_user=StringFormatter(slots=["<|user|>\n{{content}}\n<|assistant|>\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}"]),
+    format_system=StringFormatter(slots=["<|system|>\n{{content}}\n"]),
+    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="default"),
+    format_observation=StringFormatter(slots=["<|user|>\n{{content}}\n<|assistant|>\n"]),
+    format_tools=ToolFormatter(tool_format="default"),
+    format_prefix=EmptyFormatter(),
+    default_system=(
+        "A chat between a curious user and an artificial intelligence assistant. "
+        "The assistant gives helpful, detailed, and polite answers to the user's questions."
+    ),
+    chat_sep="<|end_of_text|>",
+    suffix=["<|end_of_text|>"],
+    mm_plugin=get_mm_plugin(name="llava_next", image_token="<image>"),
+)
+
 # copied from chatml template
 register_template(
     name="qwen",
