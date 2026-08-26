@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 from ...utils.lazy_import import _LazyModule
 
-
 import_structure = {
     "configuration": ["Idefics3Config", "Idefics3VisionConfig"],
     "image_processor": ["Idefics3ImageProcessor"],
