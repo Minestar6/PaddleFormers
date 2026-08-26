@@ -113,7 +113,9 @@ class Idefics3Processor(ProcessorMixin):
             image_kwargs = output_kwargs["images_kwargs"].copy()
             image_kwargs.pop("return_tensors", None)
             image_inputs = self.image_processor(images, return_tensors=None, **image_kwargs)
-            images_replacements = [self.replace_image_token(image_inputs, idx, image_seq_len) for idx in range(sum(map(len, images)))]
+            images_replacements = [
+                self.replace_image_token(image_inputs, idx, image_seq_len) for idx in range(sum(map(len, images)))
+            ]
             image_inputs.pop("rows", None)
             image_inputs.pop("cols", None)
 
@@ -184,9 +186,7 @@ class Idefics3Processor(ProcessorMixin):
         for row in range(image_rows):
             for col in range(image_cols):
                 text_split_images += (
-                    f"{self.fake_image_token}"
-                    f"<row_{row + 1}_col_{col + 1}>"
-                    f"{self.image_token * image_seq_len}"
+                    f"{self.fake_image_token}" f"<row_{row + 1}_col_{col + 1}>" f"{self.image_token * image_seq_len}"
                 )
             text_split_images += "\n"
         text_split_images += (
@@ -202,9 +202,13 @@ class Idefics3Processor(ProcessorMixin):
         replaced_text = []
         for sample in text:
             while self.image_token in sample:
+                if image_idx >= len(images_replacements):
+                    raise ValueError("The number of image tokens exceeds the available image replacements.")
                 sample = sample.replace(self.image_token, images_replacements[image_idx], 1)
                 image_idx += 1
             replaced_text.append(sample)
+        if image_idx != len(images_replacements):
+            raise ValueError("The number of image replacements does not match the number of image tokens.")
         return replaced_text
 
     def create_mm_token_type_ids(self, input_ids):

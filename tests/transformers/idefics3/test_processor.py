@@ -9,7 +9,12 @@ import unittest
 
 import paddle
 
-from paddleformers.transformers import AutoProcessor, AutoTokenizer, Idefics3ImageProcessor, Idefics3Processor
+from paddleformers.transformers import (
+    AutoProcessor,
+    AutoTokenizer,
+    Idefics3ImageProcessor,
+    Idefics3Processor,
+)
 from tests.transformers.test_processing_common import ProcessorTesterMixin
 
 
@@ -101,7 +106,9 @@ class Idefics3ProcessorTest(ProcessorTesterMixin, unittest.TestCase):
 
         inputs = processor(text="lower newer <image>", images=image_input, return_tensors="pd")
 
-        self.assertListEqual(list(inputs.keys()), ["input_ids", "attention_mask", "pixel_values", "pixel_attention_mask"])
+        self.assertListEqual(
+            list(inputs.keys()), ["input_ids", "attention_mask", "pixel_values", "pixel_attention_mask"]
+        )
 
         with self.assertRaises(ValueError):
             processor()
@@ -138,6 +145,15 @@ class Idefics3ProcessorTest(ProcessorTesterMixin, unittest.TestCase):
         replaced = processor.get_text_with_replacements(text, replacements)
 
         self.assertEqual(replaced, ["a first b", "c second d"])
+
+    def test_get_text_with_replacements_checks_replacement_count(self):
+        processor = self.get_processor()
+
+        with self.assertRaises(ValueError):
+            processor.get_text_with_replacements(["a <image> b"], [])
+
+        with self.assertRaises(ValueError):
+            processor.get_text_with_replacements(["a b"], ["unused"])
 
     def test_validate_inputs_checks_image_count(self):
         processor = self.get_processor()
