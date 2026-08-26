@@ -206,8 +206,12 @@ class Idefics3ImageProcessor(BaseImageProcessor):
             max_num_images = max(max(len(sample), 1) for sample in processed_samples)
             max_height = max((image.shape[-2] for sample in processed_samples for image in sample), default=1)
             max_width = max((image.shape[-1] for sample in processed_samples for image in sample), default=1)
-            pixel_values = np.zeros((len(processed_samples), max_num_images, 3, max_height, max_width), dtype="float32")
-            pixel_attention_mask = np.zeros((len(processed_samples), max_num_images, max_height, max_width), dtype="int64")
+            pixel_values = np.zeros(
+                (len(processed_samples), max_num_images, 3, max_height, max_width), dtype="float32"
+            )
+            pixel_attention_mask = np.zeros(
+                (len(processed_samples), max_num_images, max_height, max_width), dtype="int64"
+            )
             for sample_idx, sample in enumerate(processed_samples):
                 for image_idx, image in enumerate(sample):
                     _, height, width = image.shape

@@ -70,9 +70,7 @@ class Idefics3Config(PretrainedConfig):
             text_config["model_type"] = text_config.get("model_type", "llama")
             self.text_config = CONFIG_MAPPING[text_config["model_type"]](**text_config)
         elif text_config is None:
-            self.text_config = CONFIG_MAPPING["llama"](
-                vocab_size=128258, rms_norm_eps=1e-5, pad_token_id=pad_token_id
-            )
+            self.text_config = CONFIG_MAPPING["llama"](vocab_size=128258, rms_norm_eps=1e-5, pad_token_id=pad_token_id)
         else:
             self.text_config = text_config
 

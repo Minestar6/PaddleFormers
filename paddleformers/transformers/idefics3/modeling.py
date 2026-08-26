@@ -21,13 +21,13 @@ from ..auto.modeling import AutoModel
 from ..llama.modeling import LlamaModel
 from ..model_outputs import (
     BaseModelOutput,
-    BaseModelOutputWithPast,
     BaseModelOutputWithPooling,
     CausalLMOutputWithPast,
     ModelOutput,
 )
 from ..model_utils import PretrainedModel, register_base_model
 from .configuration import Idefics3Config, Idefics3VisionConfig
+
 
 @dataclass
 class Idefics3BaseModelOutputWithPast(ModelOutput):
@@ -76,9 +76,7 @@ class Idefics3VisionEmbeddings(nn.Layer):
         boundaries = paddle.arange(
             1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side
         )  # default float32, matching HF
-        position_ids = paddle.zeros(
-            [batch_size, max_patches_h * max_patches_w], dtype="int64"
-        )
+        position_ids = paddle.zeros([batch_size, max_patches_h * max_patches_w], dtype="int64")
 
         # Per-image position-id computation 鈥?matches the installed HF
         # implementation which loops over batch elements individually.
@@ -300,7 +298,9 @@ class Idefics3PreTrainedModel(PretrainedModel):
         return {"aoa_statements": statements}
 
     def _init_weights(self, layer):
-        std = getattr(self.config, "initializer_range", None) or getattr(self.config.vision_config, "initializer_range", 0.02)
+        std = getattr(self.config, "initializer_range", None) or getattr(
+            self.config.vision_config, "initializer_range", 0.02
+        )
         if isinstance(layer, (nn.Linear, nn.Conv2D)):
             layer.weight.set_value(paddle.normal(mean=0.0, std=std, shape=layer.weight.shape))
             if getattr(layer, "bias", None) is not None:
@@ -412,16 +412,21 @@ class Idefics3Model(Idefics3PreTrainedModel):
         else:
             if pixel_attention_mask.shape[:2] != pixel_values.shape[:2]:
                 raise ValueError("`pixel_attention_mask` batch and num_images dimensions must match `pixel_values`.")
-            pixel_attention_mask = pixel_attention_mask.reshape([batch_size * num_images, *pixel_attention_mask.shape[2:]])
+            pixel_attention_mask = pixel_attention_mask.reshape(
+                [batch_size * num_images, *pixel_attention_mask.shape[2:]]
+            )
             pixel_attention_mask = paddle.gather(pixel_attention_mask, real_indices, axis=0).astype("bool")
 
         patch_size = self.config.vision_config.patch_size
         valid_h = (pixel_attention_mask.shape[1] // patch_size) * patch_size
         valid_w = (pixel_attention_mask.shape[2] // patch_size) * patch_size
         pixel_attention_mask = pixel_attention_mask[:, :valid_h, :valid_w]
-        patch_attention_mask = pixel_attention_mask.reshape(
-            [pixel_attention_mask.shape[0], valid_h // patch_size, patch_size, valid_w // patch_size, patch_size]
-        ).sum(axis=[2, 4]) > 0
+        patch_attention_mask = (
+            pixel_attention_mask.reshape(
+                [pixel_attention_mask.shape[0], valid_h // patch_size, patch_size, valid_w // patch_size, patch_size]
+            ).sum(axis=[2, 4])
+            > 0
+        )
         image_outputs = self.vision_model(
             pixel_values=flat_pixel_values, patch_attention_mask=patch_attention_mask, return_dict=True
         )
@@ -442,12 +447,15 @@ class Idefics3Model(Idefics3PreTrainedModel):
         pixel_attention_mask=None,
         image_hidden_states=None,
         use_cache=None,
-        output_hidden_states=None,
         output_attentions=None,
+        output_hidden_states=None,
         return_dict=True,
         cache_position=None,
         **kwargs,
     ):
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
         if input_ids is None and inputs_embeds is None:
             raise ValueError("You have to specify either input_ids or inputs_embeds.")
         if inputs_embeds is None:
@@ -470,12 +478,18 @@ class Idefics3Model(Idefics3PreTrainedModel):
             return_dict=True,
         )
         if not return_dict:
-            return (text_outputs.last_hidden_state, text_outputs.past_key_values, text_outputs.hidden_states, None, image_hidden_states)
+            return (
+                text_outputs.last_hidden_state,
+                text_outputs.past_key_values,
+                text_outputs.hidden_states,
+                None,
+                image_hidden_states,
+            )
         return Idefics3BaseModelOutputWithPast(
             last_hidden_state=text_outputs.last_hidden_state,
             past_key_values=text_outputs.past_key_values,
             hidden_states=text_outputs.hidden_states,
-            attentions=getattr(text_outputs, "attentions", None),
+            attentions=None,
             image_hidden_states=image_hidden_states,
         )
 
@@ -508,7 +522,9 @@ class Idefics3ForConditionalGeneration(Idefics3PreTrainedModel, GenerationMixin)
         self.lm_head = value
 
     def get_image_features(self, pixel_values, pixel_attention_mask=None, **kwargs):
-        return self.model.get_image_features(pixel_values=pixel_values, pixel_attention_mask=pixel_attention_mask, **kwargs)
+        return self.model.get_image_features(
+            pixel_values=pixel_values, pixel_attention_mask=pixel_attention_mask, **kwargs
+        )
 
     def forward(
         self,
@@ -565,7 +581,13 @@ class Idefics3ForConditionalGeneration(Idefics3PreTrainedModel, GenerationMixin)
             loss, _ = self.criterion(logits, labels)
 
         if not return_dict:
-            output = (logits, outputs.past_key_values, outputs.hidden_states, outputs.attentions, outputs.image_hidden_states)
+            output = (
+                logits,
+                outputs.past_key_values,
+                outputs.hidden_states,
+                outputs.attentions,
+                outputs.image_hidden_states,
+            )
             return ((loss,) + output) if loss is not None else output
         return Idefics3CausalLMOutputWithPast(
             loss=loss,
@@ -612,22 +634,24 @@ class Idefics3ForConditionalGeneration(Idefics3PreTrainedModel, GenerationMixin)
         if image_hidden_states is not None or cache_position[0] != 0:
             model_inputs["pixel_values"] = None
             model_inputs["pixel_attention_mask"] = None
+        if cache_position[0] != 0:
+            model_inputs["image_hidden_states"] = None
         return model_inputs
 
-    def expand_inputs_for_generation(
-        self,
-        expand_size: int = 1,
-        is_encoder_decoder: bool = False,
-        input_ids: Optional[paddle.Tensor] = None,
-        **model_kwargs,
-    ):
+    def expand_inputs_for_generation(self, input_ids, expand_size, attention_mask=None, **model_kwargs):
         if expand_size == 1:
             return input_ids, model_kwargs
+        if attention_mask is not None:
+            model_kwargs["attention_mask"] = attention_mask.repeat_interleave(expand_size, axis=0)
         for key, value in list(model_kwargs.items()):
-            if value is None or not isinstance(value, paddle.Tensor):
+            if (
+                key == "attention_mask"
+                or key == "cache_position"
+                or value is None
+                or not isinstance(value, paddle.Tensor)
+            ):
                 continue
-            if key != "cache_position":
-                model_kwargs[key] = value.repeat_interleave(expand_size, axis=0)
+            model_kwargs[key] = value.repeat_interleave(expand_size, axis=0)
         if input_ids is not None:
             input_ids = input_ids.repeat_interleave(expand_size, axis=0)
         return input_ids, model_kwargs

@@ -3,14 +3,23 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 from __future__ import annotations
 
+import tempfile
 import unittest
 
+import numpy as np
 import paddle
 
-from paddleformers.transformers import Idefics3Config, Idefics3ForConditionalGeneration, Idefics3Model
+from paddleformers.transformers import (
+    Idefics3Config,
+    Idefics3ForConditionalGeneration,
+    Idefics3Model,
+)
 from tests.transformers.test_configuration_common import ConfigTester
 from tests.transformers.test_generation_utils import GenerationTesterMixin
-from tests.transformers.test_modeling_common import ModelTesterMixin, ModelTesterPretrainedMixin
+from tests.transformers.test_modeling_common import (
+    ModelTesterMixin,
+    ModelTesterPretrainedMixin,
+)
 
 
 class Idefics3ModelTester:
@@ -19,17 +28,21 @@ class Idefics3ModelTester:
         parent,
         batch_size=1,
         seq_length=3,
+        is_training=False,
         image_token_id=4,
         pad_token_id=0,
         hidden_size=16,
+        num_hidden_layers=1,
         vocab_size=32,
     ):
         self.parent = parent
         self.batch_size = batch_size
         self.seq_length = seq_length
+        self.is_training = is_training
         self.image_token_id = image_token_id
         self.pad_token_id = pad_token_id
         self.hidden_size = hidden_size
+        self.num_hidden_layers = num_hidden_layers
         self.vocab_size = vocab_size
 
     def get_config(self):
@@ -41,7 +54,7 @@ class Idefics3ModelTester:
                 "model_type": "llama",
                 "hidden_size": self.hidden_size,
                 "intermediate_size": 32,
-                "num_hidden_layers": 1,
+                "num_hidden_layers": self.num_hidden_layers,
                 "num_attention_heads": 4,
                 "num_key_value_heads": 2,
                 "vocab_size": self.vocab_size,
@@ -49,6 +62,7 @@ class Idefics3ModelTester:
                 "bos_token_id": 1,
                 "eos_token_id": 2,
                 "pad_token_id": self.pad_token_id,
+                "fuse_rms_norm": False,
             },
             vision_config={
                 "hidden_size": 8,
@@ -89,6 +103,7 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
     all_model_classes = (Idefics3Model, Idefics3ForConditionalGeneration)
     all_generative_model_classes = {Idefics3ForConditionalGeneration: {Idefics3Model, "idefics3"}}
     max_new_tokens = 3
+    has_attentions = False
 
     def setUp(self):
         self.model_tester = Idefics3ModelTester(self)
@@ -112,94 +127,6 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
             logits_processor_kwargs["bad_words_ids"].append([config.image_token_id])
         return logits_processor_kwargs
 
-    def _greedy_generate(
-        self,
-        model,
-        inputs_dict,
-        output_scores=False,
-        output_logits=False,
-        output_attentions=False,
-        output_hidden_states=False,
-        return_dict_in_generate=False,
-        use_cache=True,
-    ):
-        logits_processor_kwargs = self._get_logits_processor_kwargs(do_sample=False, config=model.config)
-        return model.generate(
-            do_sample=False,
-            num_beams=1,
-            max_new_tokens=self.max_new_tokens,
-            min_new_tokens=self.max_new_tokens,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            output_scores=output_scores,
-            output_logits=output_logits,
-            return_dict_in_generate=return_dict_in_generate,
-            use_cache=use_cache,
-            trunc_input=False,
-            **logits_processor_kwargs,
-            **inputs_dict,
-        )
-
-    def _beam_search_generate(
-        self,
-        model,
-        inputs_dict,
-        beam_kwargs,
-        output_scores=False,
-        output_logits=False,
-        output_attentions=False,
-        output_hidden_states=False,
-        return_dict_in_generate=False,
-        use_cache=True,
-    ):
-        logits_processor_kwargs = self._get_logits_processor_kwargs(do_sample=False, config=model.config)
-        return model.generate(
-            do_sample=False,
-            max_new_tokens=self.max_new_tokens,
-            min_new_tokens=self.max_new_tokens,
-            output_scores=output_scores,
-            output_logits=output_logits,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict_in_generate=return_dict_in_generate,
-            use_cache=use_cache,
-            trunc_input=False,
-            **beam_kwargs,
-            **logits_processor_kwargs,
-            **inputs_dict,
-        )
-
-    def _sample_generate(
-        self,
-        model,
-        inputs_dict,
-        num_return_sequences,
-        output_scores=False,
-        output_logits=False,
-        output_attentions=False,
-        output_hidden_states=False,
-        return_dict_in_generate=False,
-        use_cache=True,
-    ):
-        paddle.seed(0)
-        logits_processor_kwargs = self._get_logits_processor_kwargs(do_sample=True, config=model.config)
-        return model.generate(
-            do_sample=True,
-            num_beams=1,
-            max_new_tokens=self.max_new_tokens,
-            min_new_tokens=self.max_new_tokens,
-            num_return_sequences=num_return_sequences,
-            output_scores=output_scores,
-            output_logits=output_logits,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict_in_generate=return_dict_in_generate,
-            use_cache=use_cache,
-            trunc_input=False,
-            **logits_processor_kwargs,
-            **inputs_dict,
-        )
-
     def prepare_config_and_inputs_for_generate(self, batch_size=1):
         config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
         inputs_dict = {k: v[:batch_size, ...] if isinstance(v, paddle.Tensor) else v for k, v in inputs_dict.items()}
@@ -209,7 +136,65 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
         return config, inputs_dict
 
     def test_config(self):
-        self.config_tester.run_common_tests()
+        self.config_tester.create_and_test_config_to_json_string()
+        self.config_tester.create_and_test_config_to_json_file()
+        self.config_tester.create_and_test_config_from_and_save_pretrained()
+        self.config_tester.check_config_can_be_init_without_params()
+        config, _ = self.model_tester.prepare_config_and_inputs_for_common()
+        base_config = Idefics3Config(**config.to_dict())
+        self.assertEqual(base_config.vocab_size, base_config.text_config.vocab_size)
+        self.assertEqual(base_config.vision_config.model_type, "idefics3_vision")
+        self.assertEqual(base_config.text_config.model_type, "llama")
+
+    def test_save_load(self):
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
+
+        for model_class in self.all_model_classes:
+            model = self._make_model_instance(config, model_class).eval()
+            with paddle.no_grad():
+                expected = model(**self._prepare_for_class(inputs_dict, model_class))[0]
+
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                model.save_pretrained(tmpdirname, save_safetensors=False, save_checkpoint_format="")
+                reloaded = model_class.from_pretrained(
+                    tmpdirname,
+                    convert_from_hf=False,
+                    load_checkpoint_format="",
+                    key_mapping={r"^(.*)$": r"\1"},
+                ).eval()
+
+                with paddle.no_grad():
+                    actual = reloaded(**self._prepare_for_class(inputs_dict, model_class))[0]
+
+            expected = expected.numpy()
+            actual = actual.numpy()
+            expected[np.isnan(expected)] = 0
+            actual[np.isnan(actual)] = 0
+            self.assertLessEqual(np.max(np.abs(expected - actual)), 1e-5)
+
+    def test_resize_tokens_embeddings(self):
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        no_label_inputs = {k: v for k, v in inputs_dict.items() if k != "labels"}
+
+        for model_class in self.all_model_classes:
+            model = self._make_model_instance(config, model_class).eval()
+            old_vocab_size = config.text_config.vocab_size
+
+            model_embed = model.resize_token_embeddings(old_vocab_size + 10)
+            self.assertEqual(model.config.text_config.vocab_size, old_vocab_size + 10)
+            self.assertEqual(model_embed.weight.shape[0], old_vocab_size + 10)
+
+            with paddle.no_grad():
+                outputs = model(**self._prepare_for_class(no_label_inputs, model_class))
+            self.assertIsInstance(outputs[0], paddle.Tensor)
+
+            model_embed = model.resize_token_embeddings(old_vocab_size - 15)
+            self.assertEqual(model.config.text_config.vocab_size, old_vocab_size - 15)
+            self.assertEqual(model_embed.weight.shape[0], old_vocab_size - 15)
+
+            with paddle.no_grad():
+                outputs = model(**self._prepare_for_class(no_label_inputs, model_class))
+            self.assertIsInstance(outputs[0], paddle.Tensor)
 
     def test_text_config(self):
         config, _ = self.model_tester.prepare_config_and_inputs_for_common()
@@ -233,8 +218,12 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
                 image_hidden_states=inputs_dict["image_hidden_states"],
             )
 
-        self.assertEqual(outputs.last_hidden_state.shape, [self.model_tester.batch_size, 3, config.text_config.hidden_size])
-        self.assertEqual(outputs.image_hidden_states.shape, [self.model_tester.batch_size, 1, config.text_config.hidden_size])
+        self.assertEqual(
+            outputs.last_hidden_state.shape, [self.model_tester.batch_size, 3, config.text_config.hidden_size]
+        )
+        self.assertEqual(
+            outputs.image_hidden_states.shape, [self.model_tester.batch_size, 1, config.text_config.hidden_size]
+        )
 
     def test_conditional_generation_forward_with_labels(self):
         config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
@@ -251,11 +240,102 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
         config = self.model_tester.get_config()
         model = Idefics3Model(config)
 
-        input_ids = paddle.to_tensor([[1, self.model_tester.image_token_id, self.model_tester.image_token_id]], dtype="int64")
+        input_ids = paddle.to_tensor(
+            [[1, self.model_tester.image_token_id, self.model_tester.image_token_id]], dtype="int64"
+        )
         image_hidden_states = paddle.zeros([1, 1, config.text_config.hidden_size], dtype="float32")
 
         with self.assertRaises(ValueError):
             model(input_ids=input_ids, image_hidden_states=image_hidden_states)
+
+    def test_greedy_generate(self):
+        for model_class in self.all_generative_model_classes:
+            config, inputs_dict = self.prepare_config_and_inputs_for_generate()
+            model = model_class(config).eval()
+
+            outputs = model.generate(
+                do_sample=False,
+                num_beams=1,
+                max_new_tokens=self.max_new_tokens,
+                min_new_tokens=self.max_new_tokens,
+                return_dict_in_generate=False,
+                use_cache=True,
+                trunc_input=False,
+                **self._get_logits_processor_kwargs(do_sample=False, config=model.config),
+                **inputs_dict,
+            )
+
+            self.assertEqual(outputs[0].shape[0], inputs_dict["input_ids"].shape[0])
+            self.assertEqual(outputs[0].shape[1], inputs_dict["input_ids"].shape[1] + self.max_new_tokens)
+
+    def test_beam_search_generate(self):
+        for model_class in self.all_generative_model_classes:
+            config, inputs_dict = self.prepare_config_and_inputs_for_generate()
+            model = model_class(config).eval()
+
+            outputs = model.generate(
+                do_sample=False,
+                decode_strategy="beam_search",
+                num_beams=2,
+                num_return_sequences=2,
+                max_new_tokens=self.max_new_tokens,
+                min_new_tokens=self.max_new_tokens,
+                return_dict_in_generate=False,
+                use_cache=True,
+                trunc_input=False,
+                **self._get_logits_processor_kwargs(do_sample=False, config=model.config),
+                **inputs_dict,
+            )
+
+            self.assertEqual(outputs[0].shape[0], inputs_dict["input_ids"].shape[0] * 2)
+            self.assertEqual(outputs[0].shape[1], inputs_dict["input_ids"].shape[1] + self.max_new_tokens)
+
+    def test_group_beam_search_generate(self):
+        for model_class in self.all_generative_model_classes:
+            config, inputs_dict = self.prepare_config_and_inputs_for_generate()
+            model = model_class(config).eval()
+
+            outputs = model.generate(
+                do_sample=False,
+                decode_strategy="beam_search",
+                num_beams=2,
+                num_beam_groups=2,
+                num_return_sequences=2,
+                diversity_rate=2.0,
+                max_new_tokens=self.max_new_tokens,
+                min_new_tokens=self.max_new_tokens,
+                return_dict_in_generate=False,
+                use_cache=True,
+                trunc_input=False,
+                **self._get_logits_processor_kwargs(do_sample=False, config=model.config),
+                **inputs_dict,
+            )
+
+            self.assertEqual(outputs[0].shape[0], inputs_dict["input_ids"].shape[0] * 2)
+            self.assertEqual(outputs[0].shape[1], inputs_dict["input_ids"].shape[1] + self.max_new_tokens)
+
+    def test_sample_generate(self):
+        for model_class in self.all_generative_model_classes:
+            config, inputs_dict = self.prepare_config_and_inputs_for_generate()
+            model = model_class(config).eval()
+
+            paddle.seed(0)
+            outputs = model.generate(
+                do_sample=True,
+                decode_strategy="sampling",
+                num_beams=1,
+                num_return_sequences=2,
+                max_new_tokens=self.max_new_tokens,
+                min_new_tokens=self.max_new_tokens,
+                return_dict_in_generate=False,
+                use_cache=True,
+                trunc_input=False,
+                **self._get_logits_processor_kwargs(do_sample=True, config=model.config),
+                **inputs_dict,
+            )
+
+            self.assertEqual(outputs[0].shape[0], inputs_dict["input_ids"].shape[0] * 2)
+            self.assertEqual(outputs[0].shape[1], inputs_dict["input_ids"].shape[1] + self.max_new_tokens)
 
 
 @unittest.skip("Idefics3 tiny checkpoint is not available yet.")
