@@ -201,12 +201,18 @@ class Idefics3Processor(ProcessorMixin):
         image_idx = 0
         replaced_text = []
         for sample in text:
-            while self.image_token in sample:
+            parts = sample.split(self.image_token)
+            num_image_tokens = len(parts) - 1
+            if image_idx + num_image_tokens > len(images_replacements):
+                raise ValueError("The number of image tokens exceeds the available image replacements.")
+
+            sample_with_replacements = parts[0]
+            for part in parts[1:]:
                 if image_idx >= len(images_replacements):
                     raise ValueError("The number of image tokens exceeds the available image replacements.")
-                sample = sample.replace(self.image_token, images_replacements[image_idx], 1)
+                sample_with_replacements += images_replacements[image_idx] + part
                 image_idx += 1
-            replaced_text.append(sample)
+            replaced_text.append(sample_with_replacements)
         if image_idx != len(images_replacements):
             raise ValueError("The number of image replacements does not match the number of image tokens.")
         return replaced_text
