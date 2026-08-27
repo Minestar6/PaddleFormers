@@ -379,17 +379,16 @@ class Idefics3Model(Idefics3PreTrainedModel):
         else:
             special_image_mask = input_ids == self.config.image_token_id
 
-        # Count image tokens BEFORE expand_as (bool mask integrity)
-        n_image_tokens = special_image_mask.sum()
-
-        special_image_mask = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
-        if inputs_embeds[special_image_mask].numel() != image_hidden_states.numel():
+        n_image_tokens = int(special_image_mask.astype("int64").sum().item())
+        n_image_features = int(image_hidden_states.shape[0] * image_hidden_states.shape[1])
+        if n_image_tokens != n_image_features:
             raise ValueError(
                 f"Image features and image tokens do not match: "
-                f"n_image_tokens={n_image_tokens.item()}, "
+                f"n_image_tokens={n_image_tokens}, "
                 f"image_hidden_states.shape={image_hidden_states.shape}, "
                 f"numel={image_hidden_states.numel()}"
             )
+        special_image_mask = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
         return inputs_embeds.masked_scatter(special_image_mask, image_hidden_states.astype(inputs_embeds.dtype))
 
     def get_image_features(self, pixel_values, pixel_attention_mask=None, **kwargs):
