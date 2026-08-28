@@ -10,9 +10,11 @@ import paddle
 from PIL import Image
 
 from paddleformers.transformers import AutoImageProcessor, Idefics3ImageProcessor
+from tests.testing_utils import gpu_device_initializer
 
 
 class Idefics3ImageProcessorTest(unittest.TestCase):
+    @gpu_device_initializer(log_prefix="Idefics3ImageProcessorTest", gpu_id=0)
     def setUp(self):
         self.image = Image.fromarray(np.full((8, 10, 3), 127, dtype=np.uint8))
         self.processor = Idefics3ImageProcessor(
