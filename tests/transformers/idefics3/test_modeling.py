@@ -3,6 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 from __future__ import annotations
 
+import copy
 import tempfile
 import unittest
 
@@ -14,6 +15,7 @@ from paddleformers.transformers import (
     Idefics3ForConditionalGeneration,
     Idefics3Model,
 )
+from tests.testing_utils import gpu_device_initializer
 from tests.transformers.test_configuration_common import ConfigTester
 from tests.transformers.test_generation_utils import GenerationTesterMixin
 from tests.transformers.test_modeling_common import (
@@ -105,7 +107,9 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
     max_new_tokens = 3
     has_attentions = False
 
+    @gpu_device_initializer(log_prefix="Idefics3ModelTest", gpu_id=0)
     def setUp(self):
+        super().setUp()
         self.model_tester = Idefics3ModelTester(self)
         self.config_tester = ConfigTester(self, config_class=Idefics3Config, has_text_modality=False)
 
@@ -155,7 +159,7 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
                 expected = model(**self._prepare_for_class(inputs_dict, model_class))[0]
 
             with tempfile.TemporaryDirectory() as tmpdirname:
-                model.save_pretrained(tmpdirname, save_safetensors=False, save_checkpoint_format="")
+                model.save_pretrained(tmpdirname, save_to_hf=False, save_checkpoint_format="")
                 reloaded = model_class.from_pretrained(
                     tmpdirname,
                     convert_from_hf=False,
@@ -173,10 +177,11 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
             self.assertLessEqual(np.max(np.abs(expected - actual)), 1e-5)
 
     def test_resize_tokens_embeddings(self):
-        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        original_config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
         no_label_inputs = {k: v for k, v in inputs_dict.items() if k != "labels"}
 
         for model_class in self.all_model_classes:
+            config = copy.deepcopy(original_config)
             model = self._make_model_instance(config, model_class).eval()
             old_vocab_size = config.text_config.vocab_size
 
@@ -191,6 +196,9 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
             model_embed = model.resize_token_embeddings(old_vocab_size - 15)
             self.assertEqual(model.config.text_config.vocab_size, old_vocab_size - 15)
             self.assertEqual(model_embed.weight.shape[0], old_vocab_size - 15)
+
+            # Input ids should be clamped to the maximum size of the reduced vocabulary
+            no_label_inputs["input_ids"] = paddle.clip(no_label_inputs["input_ids"], max=old_vocab_size - 15 - 1)
 
             with paddle.no_grad():
                 outputs = model(**self._prepare_for_class(no_label_inputs, model_class))
