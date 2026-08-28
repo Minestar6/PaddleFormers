@@ -61,6 +61,11 @@ PaddleFormers 是基于百度深度学习框架 PaddlePaddle 搭建的 Transform
       <td>deepseek3</td>
     </tr>
     <tr>
+      <td>Cohere</td>
+      <td>CohereForAI/aya-expanse-8b、CohereForAI/aya-expanse-32b</td>
+      <td>aya</td>
+    </tr>
+    <tr>
       <td>DeepSeekv3.2</td>
       <td>deepseek-ai/DeepSeek-V3.2</td>
       <td>deepseek3</td>
