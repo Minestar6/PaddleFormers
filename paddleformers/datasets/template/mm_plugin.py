@@ -394,6 +394,8 @@ class BasePlugin(MMPluginMixin):
 
 @dataclass
 class LlavaNextPlugin(BasePlugin):
+    image_token_suffix: str = ""
+
     @override
     def process_messages(
         self,
@@ -436,7 +438,8 @@ class LlavaNextPlugin(BasePlugin):
                 )
             parts = content.split(IMAGE_PLACEHOLDER)
             expanded_tokens = [
-                self.image_token * int(num_image_tokens[image_idx + offset]) for offset in range(placeholder_count)
+                self.image_token * int(num_image_tokens[image_idx + offset]) + self.image_token_suffix
+                for offset in range(placeholder_count)
             ]
             content = parts[0] + "".join(expanded + part for expanded, part in zip(expanded_tokens, parts[1:]))
             image_idx += placeholder_count

@@ -649,26 +649,17 @@ register_template(
 )
 
 register_template(
-    name="llava_next",
-    format_user=StringFormatter(slots=["[INST] {{content}} [/INST]"]),
-    format_assistant=StringFormatter(slots=["{{content}}"]),
-    format_system=StringFormatter(slots=["<<SYS>>\n{{content}}\n<</SYS>>\n\n"]),
-    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="default"),
-    format_observation=StringFormatter(slots=["[INST] {{content}} [/INST]"]),
-    format_tools=ToolFormatter(tool_format="default"),
-    chat_sep="</s>",
-    suffix=["</s>"],
-    mm_plugin=get_mm_plugin(name="llava_next", image_token="<image>"),
-    template_class=Llama2Template,
-)
-
-register_template(
     name="granite_vision",
-    format_user=StringFormatter(slots=["<|user|>\n{{content}}\n<|assistant|>\n"]),
+    format_user=StringFormatter(slots=["<|user|>\n {{content}}\n<|assistant|>\n"]),
     format_assistant=StringFormatter(slots=["{{content}}"]),
     format_system=StringFormatter(slots=["<|system|>\n{{content}}\n"]),
-    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="default"),
-    format_observation=StringFormatter(slots=["<|user|>\n{{content}}\n<|assistant|>\n"]),
+    format_function=FunctionFormatter(
+        slots=["<|start_of_role|>assistant<|end_of_role|><|tool_call|>{{content}}<|end_of_text|>\n"],
+        tool_format="default",
+    ),
+    format_observation=StringFormatter(
+        slots=["<|start_of_role|>tool_response<|end_of_role|>{{content}}<|end_of_text|>\n"]
+    ),
     format_tools=ToolFormatter(tool_format="default"),
     format_prefix=EmptyFormatter(),
     default_system=(
@@ -677,7 +668,7 @@ register_template(
     ),
     chat_sep="<|end_of_text|>",
     suffix=["<|end_of_text|>"],
-    mm_plugin=get_mm_plugin(name="llava_next", image_token="<image>"),
+    mm_plugin=get_mm_plugin(name="llava_next", image_token="<image>", image_token_suffix="\n"),
 )
 
 # copied from chatml template
