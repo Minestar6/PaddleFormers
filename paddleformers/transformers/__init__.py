@@ -203,7 +203,7 @@ import_structure = {
         "T5GemmaForSequenceClassification",
         "T5GemmaForTokenClassification",
     ],
-    "t5gemma":[],
+    "t5gemma": [],
     "gemma3.configuration": ["Gemma3Config"],
     "gemma3.image_processor": ["Gemma3ImageProcessor", "Gemma3ImageProcessorKwargs"],
     "gemma3.image_processor_fast": ["Gemma3ImageProcessorFast"],
