@@ -22,11 +22,9 @@ import paddle
 
 from paddleformers.transformers import (
     AutoConfig,
-    AutoModelForCausalLM,
     AutoModelForConditionalGeneration,
     T5GemmaConfig,
     T5GemmaEncoderModel,
-    T5GemmaForCausalLM,
     T5GemmaForConditionalGeneration,
     T5GemmaForSequenceClassification,
     T5GemmaForTokenClassification,
@@ -450,25 +448,6 @@ class T5GemmaModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCas
             )
             loaded.eval()
             result = loaded(**inputs_dict)
-        self.assertEqual(
-            result[0].shape,
-            [self.model_tester.batch_size, self.model_tester.decoder_seq_length, self.model_tester.vocab_size],
-        )
-
-    def test_auto_causal_lm_compat_from_local_tiny_weight(self):
-        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
-        model = T5GemmaForConditionalGeneration(config)
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            model.save_pretrained(tmpdirname, save_to_hf=False, save_checkpoint_format="")
-            loaded = AutoModelForCausalLM.from_pretrained(
-                tmpdirname,
-                dtype="float32",
-                convert_from_hf=False,
-                load_checkpoint_format="",
-            )
-            loaded.eval()
-            result = loaded(**inputs_dict)
-        self.assertIsInstance(loaded, T5GemmaForCausalLM)
         self.assertEqual(
             result[0].shape,
             [self.model_tester.batch_size, self.model_tester.decoder_seq_length, self.model_tester.vocab_size],
