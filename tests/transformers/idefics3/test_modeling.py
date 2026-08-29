@@ -159,7 +159,7 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
                 expected = model(**self._prepare_for_class(inputs_dict, model_class))[0]
 
             with tempfile.TemporaryDirectory() as tmpdirname:
-                model.save_pretrained(tmpdirname, save_to_hf=False, save_checkpoint_format="")
+                model.save_pretrained(tmpdirname, save_safetensors=False, save_checkpoint_format="")
                 reloaded = model_class.from_pretrained(
                     tmpdirname,
                     convert_from_hf=False,
