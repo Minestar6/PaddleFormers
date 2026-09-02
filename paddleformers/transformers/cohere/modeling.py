@@ -19,6 +19,7 @@ from typing import Callable, Optional, Tuple, Union
 import paddle
 from paddle import nn
 from paddle.distributed.fleet.utils.sequence_parallel_utils import ScatterOp
+from paddle.distributed.fleet.utils.sequence_parallel_utils import mark_as_sequence_parallel_parameter
 
 from ...nn.attention.interface import ALL_ATTENTION_FUNCTIONS
 from ...nn.criterion.interface import CriterionLayer
@@ -26,7 +27,7 @@ from ...nn.embedding import Embedding as GeneralEmbedding
 from ...nn.linear import Linear as GeneralLinear
 from ...nn.lm_head import LMHead as GeneralLMHead
 from ...nn.mlp import MLP
-from ...nn.pp_model import GeneralModelForCausalLMPipe, parse_args
+from ...nn.pp_model import GeneralModelForCausalLMPipe, LMHeadPipe as GeneralLMHeadPipe, parse_args
 from ..cache_utils import Cache, DynamicCache
 from ..masking_utils import create_causal_mask_and_row_indices
 from ..model_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
@@ -80,6 +81,9 @@ class CohereLayerNorm(nn.Layer):
         hidden_states = self.weight.astype("float32") * hidden_states
         return hidden_states.astype(input_dtype)
 
+    def enable_sequence_parallel(self):
+        mark_as_sequence_parallel_parameter(self.weight)
+
 
 class CohereLayerNormPipe(CohereLayerNorm):
     def __init__(self, config: CohereConfig, hidden_size=None, norm_eps=None, **kwargs):
@@ -88,6 +92,8 @@ class CohereLayerNormPipe(CohereLayerNorm):
             eps=config.layer_norm_eps if norm_eps is None else norm_eps,
         )
         self.config = config
+        if self.config.sequence_parallel:
+            self.enable_sequence_parallel()
 
     def forward(self, args):
         hidden_states, _, _, _, _ = parse_args(args)
@@ -157,7 +163,6 @@ class CohereAttention(nn.Layer):
             has_bias=config.attention_bias,
             config=config,
             tp_plan="colwise",
-            gather_output=True,
         )
         self.k_proj = GeneralLinear.create(
             config.hidden_size,
@@ -165,7 +170,6 @@ class CohereAttention(nn.Layer):
             has_bias=config.attention_bias,
             config=config,
             tp_plan="colwise",
-            gather_output=True,
         )
         self.v_proj = GeneralLinear.create(
             config.hidden_size,
@@ -173,7 +177,6 @@ class CohereAttention(nn.Layer):
             has_bias=config.attention_bias,
             config=config,
             tp_plan="colwise",
-            gather_output=True,
         )
         self.o_proj = GeneralLinear.create(
             q_hidden_size,
@@ -181,7 +184,6 @@ class CohereAttention(nn.Layer):
             has_bias=config.attention_bias,
             config=config,
             tp_plan="rowwise",
-            input_is_parallel=False,
         )
         if self.use_qk_norm:
             self.q_norm = CohereLayerNorm(hidden_size=(self.num_heads, self.head_dim), eps=config.layer_norm_eps)
@@ -189,6 +191,9 @@ class CohereAttention(nn.Layer):
                 hidden_size=(self.num_key_value_heads, self.head_dim),
                 eps=config.layer_norm_eps,
             )
+            if self.config.sequence_parallel:
+                self.q_norm.enable_sequence_parallel()
+                self.k_norm.enable_sequence_parallel()
 
     def forward(
         self,
@@ -250,6 +255,8 @@ class CohereDecoderLayer(nn.Layer):
         self.self_attn = CohereAttention(config=config, layer_idx=layer_idx)
         self.mlp = MLP(config, has_bias=False)
         self.input_layernorm = CohereLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        if config.sequence_parallel:
+            self.input_layernorm.enable_sequence_parallel()
 
     def forward(
         self,
@@ -277,7 +284,11 @@ class CohereDecoderLayer(nn.Layer):
         return hidden_states
 
 
-class CohereLMHeadPipe(GeneralLMHead):
+class CohereLMHeadPipe(GeneralLMHeadPipe):
+    @property
+    def embedding_weight(self):
+        return self.weight
+
     def forward(self, args):
         hidden_states, _, _, _, _ = parse_args(args)
         logits = super().forward(hidden_states)
@@ -395,6 +406,8 @@ class CohereModel(CoherePretrainedModel):
             [CohereDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self.norm = CohereLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        if config.sequence_parallel:
+            self.norm.enable_sequence_parallel()
         self.rotary_emb = CohereRotaryEmbedding(config=config)
 
     def forward(
@@ -503,24 +516,6 @@ class CohereForCausalLM(CoherePretrainedModel):
         padding = paddle.full([*labels.shape[:-1], 1], ignore_index, dtype=labels.dtype)
         return paddle.concat([labels[..., 1:], padding], axis=-1)
 
-    def _maybe_align_labels_with_hf(self, labels: paddle.Tensor, input_ids: Optional[paddle.Tensor]) -> paddle.Tensor:
-        if input_ids is None or labels.ndim == 0 or input_ids.shape != labels.shape:
-            return labels
-
-        ignore_index = getattr(self.config, "ignored_index", -100)
-        if bool(paddle.equal_all(labels, input_ids)):
-            return self._shift_labels_for_causal_lm(labels)
-
-        if labels.shape[-1] <= 1:
-            return labels
-
-        aligned_tokens = labels[..., :-1] == input_ids[..., 1:]
-        ignored_tokens = labels[..., :-1] == ignore_index
-        if bool(paddle.all(aligned_tokens | ignored_tokens)):
-            return labels
-
-        return self._shift_labels_for_causal_lm(labels)
-
     def forward(
         self,
         input_ids: Optional[paddle.Tensor] = None,
@@ -563,7 +558,6 @@ class CohereForCausalLM(CoherePretrainedModel):
 
         loss = None
         if labels is not None:
-            labels = self._maybe_align_labels_with_hf(labels, input_ids)
             loss, _ = self.criterion(logits, labels, loss_mask=loss_mask)
 
         if not return_dict:
@@ -588,7 +582,6 @@ class CohereForCausalLMPipe(GeneralModelForCausalLMPipe):
     _rotary_emb_cls = CohereRotaryEmbedding
     _lmhead_pipe_cls = CohereLMHeadPipe
     _rms_norm_pipe_cls = CohereLayerNormPipe
-    _norm_cls = "rms_norm"
     _tied_weights_keys = ["lm_head.weight"]
     transpose_weight_keys = CoherePretrainedModel.transpose_weight_keys
     _gen_aoa_config = CoherePretrainedModel._gen_aoa_config
