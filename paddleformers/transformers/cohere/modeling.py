@@ -18,8 +18,10 @@ from typing import Callable, Optional, Tuple, Union
 
 import paddle
 from paddle import nn
-from paddle.distributed.fleet.utils.sequence_parallel_utils import ScatterOp
-from paddle.distributed.fleet.utils.sequence_parallel_utils import mark_as_sequence_parallel_parameter
+from paddle.distributed.fleet.utils.sequence_parallel_utils import (
+    ScatterOp,
+    mark_as_sequence_parallel_parameter,
+)
 
 from ...nn.attention.interface import ALL_ATTENTION_FUNCTIONS
 from ...nn.criterion.interface import CriterionLayer
@@ -27,7 +29,9 @@ from ...nn.embedding import Embedding as GeneralEmbedding
 from ...nn.linear import Linear as GeneralLinear
 from ...nn.lm_head import LMHead as GeneralLMHead
 from ...nn.mlp import MLP
-from ...nn.pp_model import GeneralModelForCausalLMPipe, LMHeadPipe as GeneralLMHeadPipe, parse_args
+from ...nn.pp_model import GeneralModelForCausalLMPipe
+from ...nn.pp_model import LMHeadPipe as GeneralLMHeadPipe
+from ...nn.pp_model import parse_args
 from ..cache_utils import Cache, DynamicCache
 from ..masking_utils import create_causal_mask_and_row_indices
 from ..model_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
