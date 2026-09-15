@@ -21,6 +21,11 @@ import numpy as np
 import paddle
 
 from paddleformers.transformers import CohereConfig, CohereForCausalLM, CohereModel
+from paddleformers.transformers.cohere.modeling import (
+    CohereDecoderLayer,
+    CohereLMHeadPipe,
+    CoherePretrainedModel,
+)
 from tests.testing_utils import gpu_device_initializer, require_package
 from tests.transformers.test_configuration_common import ConfigTester
 from tests.transformers.test_generation_utils import GenerationTesterMixin
@@ -314,6 +319,44 @@ class CohereModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCase
     def test_cohere_qk_norm_model(self):
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
         self.model_tester.create_and_check_qk_norm_model(*config_and_inputs)
+
+    def test_decoder_layer_keeps_config_for_pipeline_wrapper(self):
+        config = self.model_tester.get_config()
+        layer = CohereDecoderLayer(config, layer_idx=0)
+        self.assertIs(layer.config, config)
+
+    def test_qk_norm_tensor_parallel_mapping_splits_heads(self):
+        config = self.model_tester.get_config()
+        config.tensor_model_parallel_size = 2
+        config.tensor_parallel_rank = 1
+        config.use_qk_norm = True
+
+        mappings = CoherePretrainedModel._get_tensor_parallel_mappings(config)
+        q_norm = np.arange(4 * config.head_dim, dtype="float32").reshape(4, config.head_dim)
+        k_norm = np.arange(2 * config.head_dim, dtype="float32").reshape(2, config.head_dim)
+
+        q_local = mappings["layers.0.self_attn.q_norm.weight"](q_norm)
+        k_local = mappings["layers.0.self_attn.k_norm.weight"](k_norm)
+        self.assertEqual(q_local.shape, (2, config.head_dim))
+        self.assertEqual(k_local.shape, (1, config.head_dim))
+        np.testing.assert_array_equal(q_local, q_norm[2:])
+        np.testing.assert_array_equal(k_local, k_norm[1:])
+
+    def test_fused_logit_scale_scales_hidden_state_without_replacing_weight(self):
+        config = self.model_tester.get_config()
+        config.use_fused_head_and_loss_fn = True
+        model = CohereLMHeadPipe(config)
+        hidden_states = paddle.randn([1, 2, config.hidden_size])
+
+        output = model((hidden_states,))
+        self.assertIsInstance(output, tuple)
+        self.assertIs(output[1], model.weight)
+        np.testing.assert_allclose(
+            output[0].numpy(),
+            (hidden_states * config.logit_scale).numpy(),
+            rtol=1e-6,
+            atol=1e-6,
+        )
 
     def test_model_past_large_inputs(self):
         config_and_inputs = self.model_tester.prepare_config_and_inputs()

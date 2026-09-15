@@ -14,10 +14,12 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Callable, Optional, Tuple, Union
 
 import paddle
 from paddle import nn
+from paddle.distributed.fleet.utils import recompute
 from paddle.distributed.fleet.utils.sequence_parallel_utils import (
     ScatterOp,
     mark_as_sequence_parallel_parameter,
@@ -195,9 +197,6 @@ class CohereAttention(nn.Layer):
                 hidden_size=(self.num_key_value_heads, self.head_dim),
                 eps=config.layer_norm_eps,
             )
-            if self.config.sequence_parallel:
-                self.q_norm.enable_sequence_parallel()
-                self.k_norm.enable_sequence_parallel()
 
     def forward(
         self,
@@ -256,6 +255,7 @@ class CohereAttention(nn.Layer):
 class CohereDecoderLayer(nn.Layer):
     def __init__(self, config: CohereConfig, layer_idx: int):
         super().__init__()
+        self.config = config
         self.self_attn = CohereAttention(config=config, layer_idx=layer_idx)
         self.mlp = MLP(config, has_bias=False)
         self.input_layernorm = CohereLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -299,8 +299,9 @@ class CohereLMHeadPipe(GeneralLMHeadPipe):
         if self.config.logit_scale is not None:
             if isinstance(logits, tuple):
                 hidden_states, lm_head_weight, lm_head_bias, transpose_y = logits
-                lm_head_bias = lm_head_bias * self.config.logit_scale if lm_head_bias is not None else None
-                return (hidden_states, lm_head_weight * self.config.logit_scale, lm_head_bias, transpose_y)
+                if lm_head_bias is not None:
+                    lm_head_bias = lm_head_bias * self.config.logit_scale
+                return (hidden_states * self.config.logit_scale, lm_head_weight, lm_head_bias, transpose_y)
             return logits * self.config.logit_scale
         return logits
 
@@ -313,6 +314,44 @@ class CoherePretrainedModel(PretrainedModel):
     _supports_flash_attn = True
     _supports_sdpa = True
     transpose_weight_keys = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+    @classmethod
+    def _get_tensor_parallel_mappings(cls, config: CohereConfig, is_split=True):
+        from ..conversion_utils import split_or_merge_func
+
+        fn = split_or_merge_func(
+            is_split=is_split,
+            tensor_model_parallel_size=config.tensor_model_parallel_size,
+            tensor_parallel_rank=config.tensor_parallel_rank,
+            num_attention_heads=config.num_attention_heads,
+        )
+
+        actions = {
+            "embed_tokens.weight": partial(fn, is_column=False),
+            "lm_head.weight": partial(fn, is_column=False),
+        }
+
+        for layer_idx in range(config.num_hidden_layers):
+            layer_prefix = f"layers.{layer_idx}"
+            actions[f"{layer_prefix}.self_attn.q_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.self_attn.k_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.self_attn.v_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.self_attn.o_proj.weight"] = partial(fn, is_column=False)
+            actions[f"{layer_prefix}.mlp.gate_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.mlp.up_proj.weight"] = partial(fn, is_column=True)
+            actions[f"{layer_prefix}.mlp.down_proj.weight"] = partial(fn, is_column=False)
+
+            if config.use_qk_norm:
+                actions[f"{layer_prefix}.self_attn.q_norm.weight"] = partial(fn, is_column=False)
+                actions[f"{layer_prefix}.self_attn.k_norm.weight"] = partial(fn, is_column=False)
+
+            if config.attention_bias:
+                actions[f"{layer_prefix}.self_attn.q_proj.bias"] = partial(fn, is_column=True)
+                actions[f"{layer_prefix}.self_attn.k_proj.bias"] = partial(fn, is_column=True)
+                actions[f"{layer_prefix}.self_attn.v_proj.bias"] = partial(fn, is_column=True)
+                actions[f"{layer_prefix}.self_attn.o_proj.bias"] = partial(fn, is_column=False)
+
+        return actions
 
     @classmethod
     def _gen_aoa_config(cls, config: CohereConfig):
@@ -474,15 +513,33 @@ class CohereModel(CoherePretrainedModel):
         for decoder_layer in self.layers:
             if output_hidden_states:
                 all_hidden_states.append(hidden_states)
-            layer_outputs = decoder_layer(
-                hidden_states,
-                attention_mask=causal_mask,
-                attn_mask_startend_row_indices=attn_mask_startend_row_indices,
-                position_ids=position_ids,
-                position_embeddings=position_embeddings,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-            )
+            has_gradient = not hidden_states.stop_gradient
+            if (
+                self.config.recompute_granularity == "full"
+                and self.config.recompute_method == "uniform"
+                and self.config.recompute_num_layers == 1
+                and has_gradient
+            ):
+                layer_outputs = self.recompute_training(
+                    decoder_layer,
+                    hidden_states,
+                    causal_mask,
+                    attn_mask_startend_row_indices,
+                    position_ids,
+                    position_embeddings,
+                    past_key_values,
+                    use_cache,
+                )
+            else:
+                layer_outputs = decoder_layer(
+                    hidden_states,
+                    attention_mask=causal_mask,
+                    attn_mask_startend_row_indices=attn_mask_startend_row_indices,
+                    position_ids=position_ids,
+                    position_embeddings=position_embeddings,
+                    past_key_values=past_key_values,
+                    use_cache=use_cache,
+                )
             hidden_states = layer_outputs[0] if isinstance(layer_outputs, (tuple, list)) else layer_outputs
 
         hidden_states = self.norm(hidden_states)
@@ -504,6 +561,32 @@ class CohereModel(CoherePretrainedModel):
             hidden_states=all_hidden_states,
         )
 
+    @paddle.jit.not_to_static
+    def recompute_training(
+        self,
+        layer_module: nn.Layer,
+        hidden_states: paddle.Tensor,
+        attention_mask: Optional[paddle.Tensor],
+        attn_mask_startend_row_indices: Optional[paddle.Tensor],
+        position_ids: paddle.Tensor,
+        position_embeddings: Tuple[paddle.Tensor, paddle.Tensor],
+        past_key_values: Optional[Cache],
+        use_cache: bool,
+    ):
+        cos, sin = position_embeddings
+        position_embeddings_safe = (cos.clone(), sin.clone())
+
+        return recompute(
+            layer_module,
+            hidden_states,
+            attention_mask,
+            attn_mask_startend_row_indices,
+            position_ids,
+            position_embeddings_safe,
+            past_key_values,
+            use_cache,
+        )
+
 
 class CohereForCausalLM(CoherePretrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
@@ -514,11 +597,6 @@ class CohereForCausalLM(CoherePretrainedModel):
         self.lm_head = GeneralLMHead(config)
         self.criterion = CriterionLayer(config)
         self.tie_weights()
-
-    def _shift_labels_for_causal_lm(self, labels: paddle.Tensor) -> paddle.Tensor:
-        ignore_index = getattr(self.config, "ignored_index", -100)
-        padding = paddle.full([*labels.shape[:-1], 1], ignore_index, dtype=labels.dtype)
-        return paddle.concat([labels[..., 1:], padding], axis=-1)
 
     def forward(
         self,
@@ -555,8 +633,9 @@ class CohereForCausalLM(CoherePretrainedModel):
         if self.config.logit_scale is not None:
             if isinstance(logits, tuple):
                 hidden_states, lm_head_weight, lm_head_bias, transpose_y = logits
-                lm_head_bias = lm_head_bias * self.config.logit_scale if lm_head_bias is not None else None
-                logits = (hidden_states, lm_head_weight * self.config.logit_scale, lm_head_bias, transpose_y)
+                if lm_head_bias is not None:
+                    lm_head_bias = lm_head_bias * self.config.logit_scale
+                logits = (hidden_states * self.config.logit_scale, lm_head_weight, lm_head_bias, transpose_y)
             else:
                 logits = logits * self.config.logit_scale
 
