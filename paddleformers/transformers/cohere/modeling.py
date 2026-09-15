@@ -24,6 +24,9 @@ from paddle.distributed.fleet.utils.sequence_parallel_utils import (
     ScatterOp,
     mark_as_sequence_parallel_parameter,
 )
+from paddle.distributed.flex_checkpoint.dcp.sharded_weight import (
+    build_sharded_state_dict,
+)
 
 from ...nn.attention.interface import ALL_ATTENTION_FUNCTIONS
 from ...nn.criterion.interface import CriterionLayer
@@ -77,6 +80,7 @@ class CohereLayerNorm(nn.Layer):
             default_initializer=nn.initializer.Constant(1.0),
         )
         self.variance_epsilon = eps
+        self.tensor_parallel_axis = None
 
     def forward(self, hidden_states: paddle.Tensor) -> paddle.Tensor:
         input_dtype = hidden_states.dtype
@@ -89,6 +93,12 @@ class CohereLayerNorm(nn.Layer):
 
     def enable_sequence_parallel(self):
         mark_as_sequence_parallel_parameter(self.weight)
+
+    def sharded_state_dict(self, structured_name_prefix: str = ""):
+        state_dict = self.state_dict(structured_name_prefix="")
+        if self.tensor_parallel_axis is not None:
+            return build_sharded_state_dict(state_dict, {"weight": self.tensor_parallel_axis}, structured_name_prefix)
+        return super().sharded_state_dict(structured_name_prefix)
 
 
 class CohereLayerNormPipe(CohereLayerNorm):
@@ -197,6 +207,9 @@ class CohereAttention(nn.Layer):
                 hidden_size=(self.num_key_value_heads, self.head_dim),
                 eps=config.layer_norm_eps,
             )
+            if config.tensor_model_parallel_size > 1:
+                self.q_norm.tensor_parallel_axis = 0
+                self.k_norm.tensor_parallel_axis = 0
 
     def forward(
         self,
