@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import paddle
 
 from paddleformers.transformers import CohereConfig, CohereForCausalLM, CohereModel
+from paddleformers.transformers.cohere import modeling as cohere_modeling
 from paddleformers.transformers.cohere.modeling import (
     CohereDecoderLayer,
     CohereLMHeadPipe,
@@ -341,6 +343,33 @@ class CohereModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCase
         self.assertEqual(k_local.shape, (1, config.head_dim))
         np.testing.assert_array_equal(q_local, q_norm[2:])
         np.testing.assert_array_equal(k_local, k_norm[1:])
+
+    def test_qk_norm_tp_weights_excluded_from_mp_sync_list(self):
+        config = self.model_tester.get_config()
+        config.tensor_model_parallel_size = 2
+        config.use_qk_norm = True
+        original_create = cohere_modeling.GeneralLinear.create
+
+        def non_parallel_create(in_features, out_features, has_bias=None, **kwargs):
+            return original_create(in_features, out_features, has_bias=has_bias, linear_type="default")
+
+        with mock.patch.object(cohere_modeling.GeneralLinear, "create", non_parallel_create):
+            layer = CohereDecoderLayer(config, layer_idx=0)
+
+        q_weight = layer.self_attn.q_norm.weight
+        k_weight = layer.self_attn.k_norm.weight
+        self.assertEqual(q_weight.shape[0], config.num_attention_heads // config.tensor_model_parallel_size)
+        self.assertTrue(q_weight.is_distributed)
+        self.assertTrue(k_weight.is_distributed)
+
+        def in_mp_sync_list(param, sync_param_name=("layer_norm",)):
+            if param.is_distributed is False:
+                return any(target in param.name for target in sync_param_name)
+            return False
+
+        self.assertFalse(in_mp_sync_list(q_weight))
+        self.assertFalse(in_mp_sync_list(k_weight))
+        self.assertTrue(in_mp_sync_list(layer.input_layernorm.weight))
 
     def test_fused_logit_scale_scales_hidden_state_without_replacing_weight(self):
         config = self.model_tester.get_config()

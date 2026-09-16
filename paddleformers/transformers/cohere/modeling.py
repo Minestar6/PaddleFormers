@@ -210,6 +210,8 @@ class CohereAttention(nn.Layer):
             if config.tensor_model_parallel_size > 1:
                 self.q_norm.tensor_parallel_axis = 0
                 self.k_norm.tensor_parallel_axis = 0
+                self.q_norm.weight.is_distributed = True
+                self.k_norm.weight.is_distributed = True
 
     def forward(
         self,
