@@ -200,6 +200,7 @@ class SeedOssAttention(nn.Layer):
         attention_mask: Optional[paddle.Tensor] = None,
         past_key_values: Optional[Cache] = None,
         use_cache: bool = False,
+        output_attentions: bool = False,
         attn_mask_startend_row_indices: Optional[paddle.Tensor] = None,
         **kwargs,
     ) -> Tuple[paddle.Tensor, Optional[paddle.Tensor], Optional[Cache]]:
@@ -246,12 +247,15 @@ class SeedOssAttention(nn.Layer):
             p=self.config.residual_dropout,
             training=self.training,
         )
+        if not output_attentions:
+            attn_weights = None
         return attn_output, attn_weights, past_key_values
 
 
 class SeedOssDecoderLayer(nn.Layer):
     def __init__(self, config: SeedOssConfig, layer_idx: int):
         super().__init__()
+        self.config = config
         self.self_attn = SeedOssAttention(config=config, layer_idx=layer_idx)
         self.mlp = SeedOssMLP(config)
         self.input_layernorm = GeneralNorm.create(
@@ -275,6 +279,7 @@ class SeedOssDecoderLayer(nn.Layer):
         attention_mask: Optional[paddle.Tensor] = None,
         past_key_values: Optional[Cache] = None,
         use_cache: Optional[bool] = False,
+        output_attentions: bool = False,
         position_embeddings: Optional[Tuple[paddle.Tensor, paddle.Tensor]] = None,
         attn_mask_startend_row_indices: Optional[paddle.Tensor] = None,
         **kwargs,
@@ -288,6 +293,7 @@ class SeedOssDecoderLayer(nn.Layer):
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             use_cache=use_cache,
+            output_attentions=output_attentions,
             attn_mask_startend_row_indices=attn_mask_startend_row_indices,
         )
         hidden_states = residual + hidden_states
@@ -298,10 +304,12 @@ class SeedOssDecoderLayer(nn.Layer):
         hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
-        if self_attn_weights is not None:
+        if output_attentions:
             outputs += (self_attn_weights,)
         if use_cache:
             outputs += (present_key_value,)
+        if type(outputs) is tuple and len(outputs) == 1:
+            outputs = outputs[0]
         return outputs
 
 
@@ -546,7 +554,10 @@ class SeedOssModel(SeedOssPretrainedModel):
                 position_embeddings=position_embeddings,
                 attn_mask_startend_row_indices=attn_mask_startend_row_indices,
             )
-            hidden_states = layer_outputs[0]
+            if isinstance(layer_outputs, (tuple, list)):
+                hidden_states = layer_outputs[0]
+            else:
+                hidden_states = layer_outputs
 
         hidden_states = self.norm(hidden_states)
         if output_hidden_states:
@@ -572,29 +583,6 @@ class SeedOssForCausalLM(SeedOssPretrainedModel):
         self.lm_head = GeneralLMHead(config)
         self.criterion = CriterionLayer(config)
         self.tie_weights()
-
-    def _shift_labels_for_causal_lm(self, labels: paddle.Tensor) -> paddle.Tensor:
-        ignore_index = getattr(self.config, "ignored_index", -100)
-        padding = paddle.full([*labels.shape[:-1], 1], ignore_index, dtype=labels.dtype)
-        return paddle.concat([labels[..., 1:], padding], axis=-1)
-
-    def _maybe_align_labels_with_hf(self, labels: paddle.Tensor, input_ids: Optional[paddle.Tensor]) -> paddle.Tensor:
-        if input_ids is None or labels.ndim == 0 or input_ids.shape != labels.shape:
-            return labels
-
-        ignore_index = getattr(self.config, "ignored_index", -100)
-        if bool(paddle.equal_all(labels, input_ids)):
-            return self._shift_labels_for_causal_lm(labels)
-
-        if labels.shape[-1] <= 1:
-            return labels
-
-        aligned_tokens = labels[..., :-1] == input_ids[..., 1:]
-        ignored_tokens = labels[..., :-1] == ignore_index
-        if bool(paddle.all(aligned_tokens | ignored_tokens)):
-            return labels
-
-        return self._shift_labels_for_causal_lm(labels)
 
     def forward(
         self,
@@ -629,7 +617,6 @@ class SeedOssForCausalLM(SeedOssPretrainedModel):
 
         loss = None
         if labels is not None:
-            labels = self._maybe_align_labels_with_hf(labels, input_ids)
             loss, _ = self.criterion(logits, labels, loss_mask=loss_mask)
 
         if not return_dict:
