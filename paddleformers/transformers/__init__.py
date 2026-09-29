@@ -200,6 +200,17 @@ import_structure = {
         "CoherePretrainedModel",
         "CohereRotaryEmbedding",
     ],
+    "seed_oss.configuration": ["SeedOssConfig"],
+    "seed_oss.modeling": [
+        "SeedOssModel",
+        "SeedOssPretrainedModel",
+        "SeedOssForCausalLM",
+        "SeedOssForCausalLMPipe",
+        "SeedOssForSequenceClassification",
+        "SeedOssForTokenClassification",
+        "SeedOssForQuestionAnswering",
+    ],
+    "seed_oss": [],
     "kimi_k25.vision_processor": ["KimiK25VisionProcessor"],
     "kimi_k25.processor": ["KimiK25Processor"],
     "kimi_k25.tokenizer": ["TikTokenTokenizer"],
@@ -570,6 +581,7 @@ if TYPE_CHECKING:
     from .minicpm3 import *
     from .cohere import *
     from .granite import *
+    from .seed_oss import *
     from .phi3 import *
     from .phi4_multimodal import *
     from .gemma3_text import *
