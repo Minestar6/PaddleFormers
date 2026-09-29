@@ -170,11 +170,6 @@ class AyaVisionPreTrainedModel(PretrainedModel):
                 f"{src}.mlp.up_proj.weight^T -> {dst}.mlp.up_proj.weight",
                 f"{src}.mlp.down_proj.weight^T -> {dst}.mlp.down_proj.weight",
             ]
-            if config.text_config.use_qk_norm:
-                aoa_statements += [
-                    f"{src}.self_attn.q_norm.weight -> {dst}.self_attn.q_norm.weight",
-                    f"{src}.self_attn.k_norm.weight -> {dst}.self_attn.k_norm.weight",
-                ]
         for layer_id in range(config.vision_config.num_hidden_layers):
             src = f"vision_tower.vision_model.encoder.layers.{layer_id}"
             dst = f"{vision_prefix}.encoder.layers.{layer_id}"
@@ -240,12 +235,6 @@ class AyaVisionPreTrainedModel(PretrainedModel):
                 f"{src}.mlp.up_proj.weight^T -> {dst}.mlp.up_proj.weight",
                 f"{src}.mlp.down_proj.weight^T -> {dst}.mlp.down_proj.weight",
             ]
-            if config.text_config.use_qk_norm:
-                aoa_statements += [
-                    f"{src}.self_attn.q_norm.weight -> {dst}.self_attn.q_norm.weight",
-                    f"{src}.self_attn.k_norm.weight -> {dst}.self_attn.k_norm.weight",
-                ]
-
         for layer_id in range(config.vision_config.num_hidden_layers):
             src = f"{vision_prefix}.encoder.layers.{layer_id}"
             dst = f"vision_tower.vision_model.encoder.layers.{layer_id}"
