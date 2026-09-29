@@ -103,7 +103,6 @@ class AyaVisionModelTester:
             "eos_token_id": self.eos_token_id,
             "tie_word_embeddings": True,
             "attention_bias": False,
-            "use_qk_norm": False,
             "layer_types": ["full_attention"] * self.num_hidden_layers,
         }
         vision_config = {

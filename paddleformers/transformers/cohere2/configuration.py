@@ -34,7 +34,6 @@ class Cohere2Config(PretrainedConfig):
         rope_theta=50000.0,
         rope_scaling=None,
         attention_dropout=0.0,
-        use_qk_norm=False,
         attention_bias=False,
         sliding_window=4096,
         layer_types=None,
@@ -73,7 +72,6 @@ class Cohere2Config(PretrainedConfig):
             rope_parameters["rope_theta"] = rope_theta
         self.rope_parameters = rope_parameters
         self.attention_dropout = attention_dropout
-        self.use_qk_norm = use_qk_norm
         self.attention_bias = attention_bias
         self.sliding_window = sliding_window
         self.layer_types = layer_types

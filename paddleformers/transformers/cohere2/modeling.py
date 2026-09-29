@@ -9,6 +9,7 @@ from paddle import nn
 from paddle.distributed.fleet.recompute.recompute import recompute
 
 from ...nn.attention.interface import ALL_ATTENTION_FUNCTIONS
+from ...nn.criterion.interface import CriterionLayer
 from ...nn.lm_head import LMHead as GeneralLMHead
 from ..activations import ACT2FN
 from ..cache_utils import Cache, DynamicCache
@@ -93,9 +94,6 @@ class Cohere2Attention(nn.Layer):
             self.hidden_size, self.num_key_value_heads * self.head_dim, bias_attr=config.attention_bias
         )
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias_attr=config.attention_bias)
-        if config.use_qk_norm:
-            self.q_norm = Cohere2LayerNorm([self.head_dim], eps=config.layer_norm_eps)
-            self.k_norm = Cohere2LayerNorm([self.head_dim], eps=config.layer_norm_eps)
 
     def forward(
         self,
@@ -112,9 +110,6 @@ class Cohere2Attention(nn.Layer):
         query_states = self.q_proj(hidden_states).reshape([bsz, q_len, self.num_heads, self.head_dim])
         key_states = self.k_proj(hidden_states).reshape([bsz, q_len, self.num_key_value_heads, self.head_dim])
         value_states = self.v_proj(hidden_states).reshape([bsz, q_len, self.num_key_value_heads, self.head_dim])
-        if self.config.use_qk_norm:
-            query_states = self.q_norm(query_states)
-            key_states = self.k_norm(key_states)
         query_states = query_states.transpose([0, 2, 1, 3])
         key_states = key_states.transpose([0, 2, 1, 3])
         value_states = value_states.transpose([0, 2, 1, 3])
@@ -216,13 +211,6 @@ class Cohere2PreTrainedModel(PretrainedModel):
                 for proj_name in ["gate_proj", "up_proj", "down_proj"]
             ]
         )
-        if config.use_qk_norm:
-            aoa_statements.extend(
-                [
-                    f"model.layers.$LAYER_ID.self_attn.{proj_name}.weight -> {model_prefix}layers.$LAYER_ID.self_attn.{proj_name}.weight"
-                    for proj_name in ["q_norm", "k_norm"]
-                ]
-            )
         if config.attention_bias:
             aoa_statements.extend(
                 [
@@ -257,13 +245,6 @@ class Cohere2PreTrainedModel(PretrainedModel):
                 for proj_name in ["gate_proj", "up_proj", "down_proj"]
             ]
         )
-        if config.use_qk_norm:
-            aoa_statements.extend(
-                [
-                    f"{model_prefix}layers.$LAYER_ID.self_attn.{proj_name}.weight -> model.layers.$LAYER_ID.self_attn.{proj_name}.weight"
-                    for proj_name in ["q_norm", "k_norm"]
-                ]
-            )
         if config.attention_bias:
             aoa_statements.extend(
                 [
@@ -471,6 +452,7 @@ class Cohere2ForCausalLM(Cohere2PreTrainedModel):
         self.model = Cohere2Model(config)
         self.vocab_size = config.vocab_size
         self.lm_head = GeneralLMHead(config)
+        self.criterion = CriterionLayer(config)
         self.logit_scale = config.logit_scale
         self.tie_word_embeddings = config.tie_word_embeddings
         self.tie_weights()
@@ -492,6 +474,7 @@ class Cohere2ForCausalLM(Cohere2PreTrainedModel):
         past_key_values: Optional[Cache] = None,
         inputs_embeds: Optional[paddle.Tensor] = None,
         labels: Optional[paddle.Tensor] = None,
+        loss_mask: Optional[paddle.Tensor] = None,
         use_cache: Optional[bool] = None,
         logits_to_keep: Union[int, paddle.Tensor] = 0,
         output_attentions: Optional[bool] = None,
@@ -518,13 +501,7 @@ class Cohere2ForCausalLM(Cohere2PreTrainedModel):
         logits = logits * self.logit_scale
         loss = None
         if labels is not None:
-            shift_logits = logits[:, :-1, :]
-            shift_labels = labels[:, 1:]
-            loss = nn.functional.cross_entropy(
-                shift_logits.reshape([-1, self.vocab_size]),
-                shift_labels.reshape([-1]),
-                ignore_index=-100,
-            )
+            loss, _ = self.criterion(logits, labels, loss_mask=loss_mask)
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
