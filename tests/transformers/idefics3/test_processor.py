@@ -6,9 +6,11 @@ from __future__ import annotations
 import shutil
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 import paddle
 
+from paddleformers.datasets.template.mm_plugin import Idefics3Plugin
 from paddleformers.transformers import AutoProcessor, Idefics3Processor
 from tests.testing_utils import gpu_device_initializer
 from tests.transformers.test_processing_common import ProcessorTesterMixin
@@ -183,6 +185,62 @@ class Idefics3ProcessorTest(ProcessorTesterMixin, unittest.TestCase):
     @unittest.skip("Idefics3ImageProcessor does not support rescale_factor.")
     def test_structured_kwargs_nested_from_dict(self):
         pass
+
+
+class Idefics3PluginTest(unittest.TestCase):
+    def setUp(self):
+        self.plugin = Idefics3Plugin(
+            image_token="<image>",
+            video_token=None,
+            audio_token=None,
+        )
+        self.processor = SimpleNamespace(
+            image_processor=object(),
+            image_seq_len=4,
+        )
+
+    def process_messages(self, messages, images, mm_inputs):
+        return self.plugin.process_messages(
+            messages=messages,
+            images=images,
+            videos=[],
+            audios=[],
+            mm_inputs=mm_inputs,
+            processor=self.processor,
+        )
+
+    def test_process_messages_expands_image_tokens_to_match_features(self):
+        result = self.process_messages(
+            messages=[{"content": "before <image> after"}],
+            images=[object()],
+            mm_inputs={"rows": [[2]], "cols": [[3]]},
+        )
+
+        content = result[0]["content"]
+        self.assertEqual(content.count("<image>"), (2 * 3 + 1) * 4)
+        self.assertIn("<row_1_col_1>", content)
+        self.assertIn("<row_2_col_3>", content)
+        self.assertIn("<global-img>", content)
+
+    def test_process_messages_expands_unsplit_image_to_global_features(self):
+        result = self.process_messages(
+            messages=[{"content": "<image>"}],
+            images=[object()],
+            mm_inputs={"rows": [[0]], "cols": [[0]]},
+        )
+
+        content = result[0]["content"]
+        self.assertEqual(content.count("<image>"), 4)
+        self.assertNotIn("<row_1_col_1>", content)
+        self.assertIn("<global-img>", content)
+
+    def test_process_messages_rejects_missing_image_grid_metadata(self):
+        with self.assertRaisesRegex(ValueError, "rows metadata"):
+            self.process_messages(
+                messages=[{"content": "<image>"}],
+                images=[object()],
+                mm_inputs={"rows": [], "cols": []},
+            )
 
 
 if __name__ == "__main__":
