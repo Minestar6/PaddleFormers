@@ -197,7 +197,6 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
             self.assertEqual(model.config.text_config.vocab_size, old_vocab_size - 15)
             self.assertEqual(model_embed.weight.shape[0], old_vocab_size - 15)
 
-            # Input ids should be clamped to the maximum size of the reduced vocabulary
             no_label_inputs["input_ids"] = paddle.clip(no_label_inputs["input_ids"], max=old_vocab_size - 15 - 1)
 
             with paddle.no_grad():
@@ -232,6 +231,31 @@ class Idefics3ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCa
         self.assertEqual(
             outputs.image_hidden_states.shape, [self.model_tester.batch_size, 1, config.text_config.hidden_size]
         )
+
+    def test_model_forward_with_pixel_values(self):
+        config = self.model_tester.get_config()
+        model = Idefics3Model(config).eval()
+        input_ids = paddle.to_tensor([[1, self.model_tester.image_token_id, 5]], dtype="int64")
+        attention_mask = paddle.ones(input_ids.shape, dtype="int64")
+        pixel_values = paddle.randn([1, 3, 8, 8], dtype="float32")
+
+        with paddle.no_grad():
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pixel_values=pixel_values,
+            )
+
+        self.assertEqual(outputs.last_hidden_state.shape, [1, 3, config.text_config.hidden_size])
+        self.assertEqual(outputs.image_hidden_states.shape, [1, 1, config.text_config.hidden_size])
+
+    def test_model_rejects_5d_pixel_values(self):
+        config = self.model_tester.get_config()
+        model = Idefics3Model(config)
+        pixel_values = paddle.randn([1, 1, 3, 8, 8], dtype="float32")
+
+        with self.assertRaisesRegex(ValueError, r"\[num_images, channels, height, width\]"):
+            model.get_image_features(pixel_values)
 
     def test_conditional_generation_forward_with_labels(self):
         config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()

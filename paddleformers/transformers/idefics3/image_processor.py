@@ -14,10 +14,9 @@ from PIL import Image, ImageOps
 
 from ..feature_extraction_utils import BatchFeature
 from ..image_processing_utils import BaseImageProcessor
+from ..image_utils import IMAGENET_STANDARD_MEAN, IMAGENET_STANDARD_STD
 
-IMAGENET_STANDARD_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STANDARD_STD = [0.229, 0.224, 0.225]
-MAX_IMAGE_SIZE = 1456
+MAX_IMAGE_SIZE = 4096
 
 
 def _to_pil(image) -> Image.Image:
@@ -104,7 +103,7 @@ def _resize_output_size_scale_below_upper_bound(height, width, max_len):
 
 
 class Idefics3ImageProcessor(BaseImageProcessor):
-    model_input_names = ["pixel_values", "pixel_attention_mask"]
+    model_input_names = ["pixel_values"]
 
     def __init__(
         self,
@@ -203,21 +202,17 @@ class Idefics3ImageProcessor(BaseImageProcessor):
             cols.append(sample_cols)
 
         if do_pad:
-            max_num_images = max(max(len(sample), 1) for sample in processed_samples)
             max_height = max((image.shape[-2] for sample in processed_samples for image in sample), default=1)
             max_width = max((image.shape[-1] for sample in processed_samples for image in sample), default=1)
-            pixel_values = np.zeros(
-                (len(processed_samples), max_num_images, 3, max_height, max_width), dtype="float32"
-            )
-            pixel_attention_mask = np.zeros(
-                (len(processed_samples), max_num_images, max_height, max_width), dtype="int64"
-            )
-            for sample_idx, sample in enumerate(processed_samples):
-                for image_idx, image in enumerate(sample):
+            num_images = sum(len(sample) for sample in processed_samples)
+            pixel_values = np.zeros((num_images, 3, max_height, max_width), dtype="float32")
+            image_idx = 0
+            for sample in processed_samples:
+                for image in sample:
                     _, height, width = image.shape
-                    pixel_values[sample_idx, image_idx, :, :height, :width] = image
-                    pixel_attention_mask[sample_idx, image_idx, :height, :width] = 1
-            data = {"pixel_values": pixel_values, "pixel_attention_mask": pixel_attention_mask}
+                    pixel_values[image_idx, :, :height, :width] = image
+                    image_idx += 1
+            data = {"pixel_values": pixel_values}
         else:
             data = {"pixel_values": processed_samples}
 

@@ -32,7 +32,6 @@ class Idefics3ProcessorTest(ProcessorTesterMixin, unittest.TestCase):
         processor.save_pretrained(cls.tmpdir)
         cls.image_token = processor.image_token
 
-    # Use GPU 0 to prevent CUDA illegal memory access during resize
     @gpu_device_initializer(log_prefix="Idefics3ProcessorTest", gpu_id=0)
     def setUp(self):
         pass
@@ -91,9 +90,6 @@ class Idefics3ProcessorTest(ProcessorTesterMixin, unittest.TestCase):
         input_processor = processor(images=image_input, text="dummy <image>", return_tensors="pd")
 
         self.assertTrue(paddle.allclose(input_image_proc["pixel_values"], input_processor["pixel_values"]))
-        self.assertTrue(
-            paddle.equal_all(input_image_proc["pixel_attention_mask"], input_processor["pixel_attention_mask"])
-        )
 
     def test_processor(self):
         processor = self.get_processor()
@@ -101,9 +97,7 @@ class Idefics3ProcessorTest(ProcessorTesterMixin, unittest.TestCase):
 
         inputs = processor(text="lower newer <image>", images=image_input, return_tensors="pd")
 
-        self.assertListEqual(
-            list(inputs.keys()), ["input_ids", "attention_mask", "pixel_values", "pixel_attention_mask"]
-        )
+        self.assertListEqual(list(inputs.keys()), ["input_ids", "attention_mask", "pixel_values"])
 
         with self.assertRaises(ValueError):
             processor()

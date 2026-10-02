@@ -481,9 +481,47 @@ class Idefics3Plugin(BasePlugin):
     fake_image_token: str = "<fake_token_around_image>"
     global_image_token: str = "<global-img>"
 
-    # Idefics3 uses a unique placeholder internally because its model image_token
-    # ("<image>") collides with the dataset IMAGE_PLACEHOLDER ("<image>").
     _IDEFICS3_IMG_PLACEHOLDER: str = "<idefics3_image>"
+
+    @override
+    def _get_mm_inputs(
+        self,
+        images,
+        videos,
+        audios,
+        processor,
+        **kwargs,
+    ):
+        mm_inputs = {}
+        if len(images) != 0:
+            image_processor = getattr(processor, "image_processor", None)
+            images = self._regularize_images(
+                images,
+                image_max_pixels=getattr(processor, "image_max_pixels", 768 * 768),
+                image_min_pixels=getattr(processor, "image_min_pixels", 32 * 32),
+            )["images"]
+            imglens = kwargs.get("imglens", None)
+            if imglens is not None:
+                images = _make_batched_images(images, imglens)
+            mm_inputs.update(image_processor(images, return_tensors="pd", return_row_col_info=True))
+        return mm_inputs
+
+    def _get_image_prompt(self, rows, cols, image_seq_len):
+        if rows == 0 and cols == 0:
+            return (
+                f"{self.fake_image_token}{self.global_image_token}"
+                f"{self.image_token * image_seq_len}{self.fake_image_token}"
+            )
+
+        prompt = ""
+        for row in range(rows):
+            for col in range(cols):
+                prompt += f"{self.fake_image_token}<row_{row + 1}_col_{col + 1}>" f"{self.image_token * image_seq_len}"
+            prompt += "\n"
+        return (
+            f"{prompt}\n{self.fake_image_token}{self.global_image_token}"
+            f"{self.image_token * image_seq_len}{self.fake_image_token}"
+        )
 
     @override
     def process_messages(
@@ -496,38 +534,35 @@ class Idefics3Plugin(BasePlugin):
         processor,
     ):
         self._validate_input(processor, images, videos, audios)
+        self._validate_messages(messages, images, videos, audios)
         num_image_tokens = 0
         messages = deepcopy(messages)
         image_seq_len = getattr(processor, "image_seq_len", 169)
 
-        # Pre-compute per-image tile counts
-        image_processor = getattr(processor, "image_processor", None)
-        do_split = getattr(image_processor, "do_image_splitting", True)
-        per_image_tiles = []
-        if self.expand_mm_tokens and do_split:
-            for img in images:
-                h, w = self._get_image_size(img)
-                _, rows, cols = image_processor.get_number_of_image_patches(h, w, {})
-                per_image_tiles.append(rows * cols + 1 if rows > 0 else 1)
-        else:
-            per_image_tiles = [1] * len(images)
+        image_rows = [row for sample_rows in mm_inputs.get("rows", []) for row in sample_rows]
+        image_cols = [col for sample_cols in mm_inputs.get("cols", []) for col in sample_cols]
+        if self.expand_mm_tokens and len(image_rows) != len(images):
+            raise ValueError("Idefics3 image rows metadata does not match the number of input images.")
+        if self.expand_mm_tokens and len(image_cols) != len(images):
+            raise ValueError("Idefics3 image cols metadata does not match the number of input images.")
 
         for message in messages:
             content = message.get("content", "")
             if not isinstance(content, str) or IMAGE_PLACEHOLDER not in content:
                 continue
 
-            # Step 1: <image> → safe temp placeholder (IMAGE_PLACEHOLDER == self.image_token)
-            for tiles in per_image_tiles:
+            for _ in images:
                 content = content.replace(IMAGE_PLACEHOLDER, self._IDEFICS3_IMG_PLACEHOLDER, 1)
 
-            # Step 2: while loop over temp placeholder, standard pattern
             while self._IDEFICS3_IMG_PLACEHOLDER in content:
-                tiles = per_image_tiles[num_image_tokens]
-                image_seqlen = tiles * image_seq_len if self.expand_mm_tokens else 1
+                replacement = (
+                    self._get_image_prompt(image_rows[num_image_tokens], image_cols[num_image_tokens], image_seq_len)
+                    if self.expand_mm_tokens
+                    else self.image_token
+                )
                 content = content.replace(
                     self._IDEFICS3_IMG_PLACEHOLDER,
-                    self.image_token * image_seqlen,
+                    replacement,
                     1,
                 )
                 num_image_tokens += 1

@@ -74,6 +74,7 @@ class Idefics3Config(PretrainedConfig):
         else:
             self.text_config = text_config
 
+        self.text_config.tie_word_embeddings = tie_word_embeddings
         self.use_cache = use_cache
         self.image_token_id = image_token_id
         self.scale_factor = scale_factor
@@ -100,11 +101,6 @@ class Idefics3Config(PretrainedConfig):
         ]:
             text_config = super().__getattribute__("text_config")
             if key in text_config.__dict__:
-                # Check self first: attributes explicitly set on Idefics3Config
-                # (e.g. tie_word_embeddings) take priority over text_config defaults.
-                self_dict = super().__getattribute__("__dict__")
-                if key in self_dict:
-                    return self_dict[key]
                 return getattr(text_config, key)
         return super().__getattribute__(key)
 
